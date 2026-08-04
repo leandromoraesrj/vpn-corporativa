@@ -1,7 +1,24 @@
-# VPN Corporativa 1.0 — Revisada
+# VPN Corporativa 1.0.1 — Correção pós-publicação
 
-Versão baseada na revisão do Codex, com correções adicionais de robustez,
-instalação, auditoria e gerenciamento de processos.
+Esta versão corrige a documentação de compatibilidade e a nomenclatura técnica
+da VPN principal, sem alterar funcionalidades.
+
+## Correções da versão 1.0.1
+
+- o painel identifica a VPN principal como **OpenFortiVPN**;
+- o ambiente oficialmente testado é Linux Mint, com Cinnamon em sessão X11;
+- o instalador é destinado a distribuições baseadas em Debian/Ubuntu com `apt`;
+- outras distribuições Linux e sessões Wayland ainda não foram validadas;
+- Windows e macOS não são suportados;
+- diferentes resoluções, escalas DPI e ambientes gráficos ainda precisam de
+  testes adicionais;
+- as dependências do instalador e os requisitos externos do BIG-IP/F5 foram
+  documentados.
+
+Não há declaração de compatibilidade universal com Linux. O cliente BIG-IP/F5
+e um navegador padrão para autenticação web são requisitos externos. **Ocultar
+F5** e **Exibir F5** dependem de `wmctrl` e `xdotool` e podem não funcionar
+corretamente em Wayland.
 
 ## Correções consolidadas
 

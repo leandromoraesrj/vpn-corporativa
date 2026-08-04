@@ -1,6 +1,6 @@
 # Registro de validação
 
-## Versão 1.0 — 03/08/2026
+## Versão 1.0.1 — 03/08/2026
 
 ### Validação isolada
 
@@ -20,10 +20,10 @@ python3 -m unittest discover -s tests -v
 
 ### Validação manual informada
 
-O layout e as funcionalidades da versão 1.0 foram validados manualmente no
-ambiente de destino. Foram confirmados conexão, desconexão, split tunneling,
-Internet, LAN, Docker, Tailscale e coexistência com a VPN secundária. Nenhum
-novo problema foi relatado após a validação final.
+O layout e as funcionalidades foram validados manualmente no Linux Mint, com
+desktop Cinnamon em sessão X11. Foram confirmados conexão, desconexão, split
+tunneling, Internet, LAN, Docker, Tailscale e coexistência com a VPN secundária.
+Nenhum novo problema foi relatado após a validação final.
 
 ### Limites da validação
 
@@ -31,6 +31,13 @@ novo problema foi relatado após a validação final.
 - Eles não conectam ao servidor corporativo e não alteram rotas reais.
 - Mudanças em Linux, GTK, `openfortivpn`, firewall ou topologia exigem nova
   validação prática.
+- Outras distribuições Linux ainda não foram validadas; o instalador foi
+  validado somente no contexto Debian/Ubuntu com `apt`.
+- Windows e macOS não são suportados.
+- Sessões Wayland não foram validadas.
+- Diferentes resoluções, escalas DPI e ambientes gráficos ainda precisam de
+  testes adicionais.
+- Não há alegação de compatibilidade universal com Linux.
 
 ## Procedimento recomendado após mudanças futuras
 

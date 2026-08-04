@@ -1,11 +1,11 @@
 {
   "product": "VPN Corporativa",
-  "version": "1.0",
-  "display_version": "1.0",
+  "version": "1.0.1",
+  "display_version": "1.0.1",
   "channel": "production",
   "release_artifacts": {
-    "archive": "vpn-corporativa-1.0.zip",
-    "checksum": "vpn-corporativa-1.0.zip.sha256",
+    "archive": "vpn-corporativa-1.0.1.zip",
+    "checksum": "vpn-corporativa-1.0.1.zip.sha256",
     "stored_in_repository": false
   },
   "files": [

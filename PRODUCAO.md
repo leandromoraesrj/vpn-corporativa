@@ -1,6 +1,22 @@
-# VPN Corporativa 1.0 — Produção
+# VPN Corporativa 1.0.1 — Produção
 
-Esta é a versão consolidada de produção 1.0.
+Esta é a correção pós-publicação de produção 1.0.1.
+
+## Compatibilidade e requisitos
+
+O ambiente oficialmente testado é Linux Mint, com Cinnamon em sessão X11, em
+uma base Debian/Ubuntu com instalação de dependências via `apt`. Outras
+distribuições Linux e sessões Wayland ainda não foram validadas. Windows e
+macOS não são suportados. Diferentes resoluções, escalas DPI e ambientes
+gráficos ainda precisam de testes adicionais; não se declara compatibilidade
+universal com Linux.
+
+O `install.sh` verifica ou instala `openfortivpn`, `python3`, `python3-gi`,
+`gir1.2-gtk-3.0`, `gir1.2-ayatanaappindicator3-0.1`, `libnotify-bin`,
+`xdg-utils`, `curl`, `wmctrl` e `xdotool`. É necessário um navegador padrão
+para autenticação web, e o cliente BIG-IP/F5 deve ser fornecido ou instalado
+separadamente. **Ocultar F5** e **Exibir F5** dependem de `wmctrl` e `xdotool`
+e podem não funcionar corretamente em Wayland.
 
 ## Conteúdo do pacote
 

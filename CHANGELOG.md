@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.1 — 2026-08-03
+
+- Corrigida a nomenclatura visível da VPN principal para OpenFortiVPN.
+- Documentado o ambiente oficialmente validado: Linux Mint, Cinnamon e X11.
+- Registrados os limites de compatibilidade com outras distribuições, Wayland,
+  resoluções, escalas DPI e ambientes gráficos.
+- Documentadas as dependências verificadas pelo instalador e os requisitos
+  externos da autenticação web e do cliente BIG-IP/F5.
+- Nenhuma funcionalidade de conexão ou rede foi alterada.
+
 ## 1.0 — 2026-08-03
 
 - Primeira versão de produção.

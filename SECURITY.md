@@ -12,5 +12,5 @@ Não inclua senhas, tokens, certificados privados nem o conteúdo de
 
 ## Escopo
 
-A versão mantida atualmente é a `1.0`. Correções de segurança serão documentadas
+A versão mantida atualmente é a `1.0.1`. Correções de segurança serão documentadas
 nas notas da versão correspondente.

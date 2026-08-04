@@ -1,4 +1,4 @@
-# VPN Corporativa 1.0
+# VPN Corporativa 1.0.1
 
 Aplicação Linux para conexão a uma VPN corporativa com split tunneling, painel GTK,
 configuração integrada e diagnóstico de rede.
@@ -39,6 +39,37 @@ sudo ./install.sh
 O instalador preserva configurações existentes, encerra versões antigas e inicia
 o ícone na bandeja sem conectar automaticamente.
 
+### Compatibilidade validada
+
+O ambiente oficialmente testado é Linux Mint, com desktop Cinnamon em sessão
+X11. O instalador é destinado a distribuições baseadas em Debian/Ubuntu que
+utilizam `apt`.
+
+Outras distribuições Linux ainda não foram validadas. Windows e macOS não são
+suportados, e sessões Wayland não foram validadas. Diferentes resoluções,
+escalas DPI e ambientes gráficos ainda precisam de testes adicionais. Portanto,
+o projeto não declara compatibilidade universal com Linux.
+
+### Dependências
+
+O `install.sh` verifica ou instala, por meio do `apt`, os seguintes pacotes:
+
+- `openfortivpn`;
+- `python3`;
+- `python3-gi`;
+- `gir1.2-gtk-3.0`;
+- `gir1.2-ayatanaappindicator3-0.1`;
+- `libnotify-bin`;
+- `xdg-utils`;
+- `curl`;
+- `wmctrl`;
+- `xdotool`.
+
+Também é necessário ter um navegador padrão para a autenticação web. O cliente
+BIG-IP/F5 deve ser fornecido ou instalado separadamente. Os recursos **Ocultar
+F5** e **Exibir F5** dependem de `wmctrl` e `xdotool` e podem não funcionar
+corretamente em Wayland.
+
 ## Configuração
 
 ```text
@@ -62,7 +93,7 @@ A URL de autenticação web da VPN secundária pode ser informada na aba
 ~/.local/state/vpn/launcher.log
 ```
 
-A versão 1.0 não usa `/tmp` para logs permanentes e remove resíduos conhecidos
+A versão 1.0.1 não usa `/tmp` para logs permanentes e remove resíduos conhecidos
 de versões anteriores durante a instalação.
 
 ## Remoção
@@ -84,7 +115,7 @@ rotas, `/etc/hosts` ou a instalação ativa.
 
 ## Política de notificações
 
-A versão 1.0 exibe notificações do sistema somente em caso de erro real:
+A versão 1.0.1 exibe notificações do sistema somente em caso de erro real:
 
 - falha ao conectar;
 - falha definitiva após as tentativas de reconexão;

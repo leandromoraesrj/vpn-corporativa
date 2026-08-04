@@ -20,7 +20,7 @@ from . import config_store, f5_backend, network
 
 LOGGER = logging.getLogger(__name__)
 
-APP_VERSION = "1.0"
+APP_VERSION = "1.0.1"
 APP_NAME = "VPN Corporativa"
 APP_ID = "br.local.vpncorporativa"
 CONNECT_HELPER = "/usr/local/libexec/vpn-connect"
@@ -417,7 +417,7 @@ class VPNApplication:
         vpn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         content.pack_start(vpn_row, False, False, 0)
 
-        primary_frame = Gtk.Frame(label="VPN principal (OpenVPN)")
+        primary_frame = Gtk.Frame(label="VPN principal (OpenFortiVPN)")
         primary_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         primary_box.set_border_width(10)
         primary_frame.add(primary_box)

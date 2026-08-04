@@ -12,7 +12,7 @@ cleanup() {
 trap cleanup EXIT
 cleanup
 
-printf '== Validação VPN Corporativa 1.0 — Produção ==\n'
+printf '== Validação VPN Corporativa 1.0.1 — Produção ==\n'
 python3 - <<'PY'
 import ast
 from pathlib import Path

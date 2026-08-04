@@ -29,7 +29,7 @@ DESKTOP_DIR="$(sudo -u "$TARGET_USER" xdg-user-dir DESKTOP 2>/dev/null || true)"
 
 clear
 echo "============================================================"
-echo "VPN CORPORATIVA 1.0 — PRODUÇÃO"
+echo "VPN CORPORATIVA 1.0.1 — PRODUÇÃO"
 echo "============================================================"
 echo
 echo "Este instalador:"
@@ -256,7 +256,7 @@ fi
 python3 -m py_compile "$APP_DIR/vpn.py" "$APP_DIR"/vpn_app/*.py
 
 echo
-echo "VPN Corporativa 1.0 instalada com sucesso."
+echo "VPN Corporativa 1.0.1 instalada com sucesso."
 echo "A auditoria específica está em:"
 echo "  $APP_DIR/auditar_vpn.sh"
 echo
