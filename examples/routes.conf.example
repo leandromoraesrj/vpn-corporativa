@@ -1,0 +1,4 @@
+# Sub-redes IPv4 que devem usar a VPN principal.
+# Substitua os exemplos reservados pelas redes autorizadas do seu ambiente.
+192.0.2.0/24
+198.51.100.0/24

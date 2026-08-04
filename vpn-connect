@@ -1,0 +1,272 @@
+#!/bin/bash
+set -euo pipefail
+export LC_ALL=C
+
+readonly CURRENT_USER="$(logname 2>/dev/null || id -un 2>/dev/null || true)"
+readonly TARGET_USER="${SUDO_USER:-$CURRENT_USER}"
+[[ -n "$TARGET_USER" && "$TARGET_USER" != "root" ]] || {
+    echo "Não foi possível identificar o usuário da sessão." >&2
+    exit 1
+}
+readonly TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+readonly CONFIG_DIR="$TARGET_HOME/.config/vpn"
+readonly CONF="$CONFIG_DIR/connection.conf"
+readonly ROUTES_FILE="$CONFIG_DIR/routes.conf"
+readonly HOSTS_MAP="$CONFIG_DIR/hosts.conf"
+readonly RUN_DIR="/run/vpn"
+readonly CONTROL_LOCK="/run/lock/vpn-corporativa.lock"
+readonly PROCESS_FILE="$RUN_DIR/openfortivpn.process"
+readonly IFACE_FILE="$RUN_DIR/interface"
+readonly ROUTE_STATE="$RUN_DIR/route_state.txt"
+readonly SNAPSHOT_DIR="$RUN_DIR/config"
+readonly ROOT_CONF="$SNAPSHOT_DIR/connection.conf"
+readonly ROOT_ROUTES="$SNAPSHOT_DIR/routes.conf"
+readonly ROOT_HOSTS="$SNAPSHOT_DIR/hosts.conf"
+readonly HOSTS_FILE="/etc/hosts"
+readonly HOSTS_START="# INICIO MAPA VPN"
+readonly HOSTS_END="# FIM MAPA VPN"
+readonly VALIDATOR="/usr/local/libexec/vpn-privileged-validation.py"
+readonly PROCESS_IDENTITY="/usr/local/libexec/vpn-process-identity"
+
+source "$PROCESS_IDENTITY"
+
+LOCK_HELD=0
+VPN_PID=""
+VPN_STARTTIME=""
+IDENTITY_TEMP=""
+INTERFACE_TEMP=""
+PUBLISHED_IDENTITY=""
+HOSTS_APPLIED=0
+IDENTITY_PUBLISHED=0
+
+log_status() {
+    printf '%s [%s] %s\n' "$(date '+%d/%m/%Y %H:%M:%S')" "$1" "$2"
+}
+
+lock_transaction() {
+    if ((LOCK_HELD == 0)); then
+        exec 9>"$CONTROL_LOCK"
+        flock -x 9
+        LOCK_HELD=1
+    fi
+}
+
+unlock_transaction() {
+    if ((LOCK_HELD == 1)); then
+        flock -u 9
+        LOCK_HELD=0
+    fi
+}
+
+cleanup_hosts() {
+    sed -i "/$HOSTS_START/,/$HOSTS_END/d" "$HOSTS_FILE"
+}
+
+state_belongs_to_attempt() {
+    [[ -n "$PUBLISHED_IDENTITY" && -f "$PROCESS_FILE" ]] || return 1
+    [[ "$(<"$PROCESS_FILE")" == "$PUBLISHED_IDENTITY" ]]
+}
+
+started_process_is_same() {
+    [[ "$VPN_PID" =~ ^[0-9]+$ && "$VPN_STARTTIME" =~ ^[0-9]+$ ]] || return 1
+    [[ "$(process_starttime "$VPN_PID" 2>/dev/null)" == "$VPN_STARTTIME" ]]
+}
+
+terminate_started_process() {
+    local signal pid
+    started_process_is_same || return 0
+    pid="$VPN_PID"
+    kill -TERM "$pid" 2>/dev/null || true
+    for _ in {1..30}; do
+        started_process_is_same || return 0
+        sleep 0.1
+    done
+    started_process_is_same || return 0
+    kill -KILL "$pid" 2>/dev/null || true
+    for _ in {1..10}; do
+        started_process_is_same || return 0
+        sleep 0.1
+    done
+}
+
+remove_attempt_state() {
+    rm -f -- "$IDENTITY_TEMP" "$INTERFACE_TEMP"
+    if ((IDENTITY_PUBLISHED == 1)) && state_belongs_to_attempt; then
+        rm -f -- "$PROCESS_FILE" "$IFACE_FILE" "$ROUTE_STATE"
+        rm -rf -- "$SNAPSHOT_DIR"
+    elif ((IDENTITY_PUBLISHED == 0)); then
+        rm -f -- "$ROUTE_STATE"
+        rm -rf -- "$SNAPSHOT_DIR"
+    fi
+}
+
+rollback() {
+    local exit_code=$?
+    trap - EXIT INT TERM
+    lock_transaction
+    terminate_started_process
+    if ((HOSTS_APPLIED == 1)); then
+        cleanup_hosts
+    fi
+    remove_attempt_state
+    unlock_transaction
+    exit "$exit_code"
+}
+
+cleanup_after_process_exit() {
+    local exit_code=$?
+    trap - EXIT INT TERM
+    lock_transaction
+    if state_belongs_to_attempt; then
+        terminate_started_process
+        cleanup_hosts
+        rm -f -- "$PROCESS_FILE" "$IFACE_FILE" "$ROUTE_STATE"
+        rm -rf -- "$SNAPSHOT_DIR"
+    fi
+    unlock_transaction
+    exit "$exit_code"
+}
+
+identity_references_live_process() {
+    local pid=""
+    [[ -f "$PROCESS_FILE" && ! -L "$PROCESS_FILE" ]] || return 1
+    while IFS='=' read -r key value; do
+        [[ "$key" == "pid" ]] && pid="$value"
+    done < "$PROCESS_FILE"
+    [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+interface_references_active_link() {
+    local interface=""
+    [[ -f "$IFACE_FILE" && ! -L "$IFACE_FILE" ]] || return 1
+    IFS= read -r interface < "$IFACE_FILE" || return 1
+    [[ "$interface" =~ ^ppp[0-9]+$ ]] || return 1
+    ip link show up dev "$interface" >/dev/null 2>&1
+}
+
+remove_stale_state() {
+    if { [[ -e "$PROCESS_FILE" ]] && identity_references_live_process; } || \
+       interface_references_active_link; then
+        log_status "ERRO" "Existe estado ativo não validado; nada foi alterado."
+        return 1
+    fi
+    cleanup_hosts
+    rm -f -- "$PROCESS_FILE" "$IFACE_FILE" "$ROUTE_STATE"
+    rm -rf -- "$SNAPSHOT_DIR"
+}
+
+lock_transaction
+
+if old_pid="$(verify_process_identity "$PROCESS_FILE" 2>/dev/null)"; then
+    log_status "INFO" "VPN já em execução com PID $old_pid."
+    unlock_transaction
+    exit 0
+fi
+
+remove_stale_state
+trap rollback EXIT INT TERM
+
+for file in "$CONF" "$ROUTES_FILE" "$HOSTS_MAP"; do
+    [[ -r "$file" && ! -L "$file" ]] || {
+        log_status "ERRO" "Arquivo ausente, ilegível ou inválido: $file"
+        exit 1
+    }
+done
+
+install -d -m 755 "$RUN_DIR"
+install -d -m 700 "$SNAPSHOT_DIR"
+
+env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C \
+    python3 -I -E "$VALIDATOR" \
+        --connection "$CONF" \
+        --routes "$ROUTES_FILE" \
+        --hosts "$HOSTS_MAP" \
+        --output "$SNAPSHOT_DIR"
+
+ip route show default | awk '$5 !~ /^ppp/ {print; exit}' > "$ROUTE_STATE"
+[[ -s "$ROUTE_STATE" ]] || {
+    log_status "ERRO" "Rota padrão local não encontrada."
+    exit 1
+}
+
+mapfile -t PPP_BEFORE < <(ip -br link show | awk '$1 ~ /^ppp[0-9]+$/ {print $1}')
+
+readonly OPENFORTIVPN_EXE="$(readlink -f "$(command -v openfortivpn)")"
+"$OPENFORTIVPN_EXE" -c "$ROOT_CONF" &
+VPN_PID=$!
+if ! VPN_STARTTIME="$(process_starttime "$VPN_PID")"; then
+    kill -TERM "$VPN_PID" 2>/dev/null || true
+    wait "$VPN_PID" 2>/dev/null || true
+    VPN_PID=""
+    exit 1
+fi
+IDENTITY_TEMP="$(mktemp "$RUN_DIR/.openfortivpn.process.XXXXXX")"
+rm -f -- "$IDENTITY_TEMP"
+write_process_identity "$VPN_PID" "$OPENFORTIVPN_EXE" "$ROOT_CONF" "$IDENTITY_TEMP"
+
+log_status "WAIT" "Aguardando interface PPP por até 60 segundos..."
+VPN_IFACE=""
+for _ in {1..60}; do
+    while IFS= read -r candidate; do
+        seen=0
+        for existing in "${PPP_BEFORE[@]}"; do
+            [[ "$candidate" == "$existing" ]] && seen=1 && break
+        done
+        if ((seen == 0)); then
+            VPN_IFACE="$candidate"
+            break
+        fi
+    done < <(ip -br link show up | awk '$1 ~ /^ppp[0-9]+$/ {print $1}')
+    [[ -n "$VPN_IFACE" ]] && break
+    started_process_is_same || exit 1
+    sleep 1
+done
+[[ -n "$VPN_IFACE" ]] || {
+    log_status "ERRO" "Timeout aguardando PPP; encerrando openfortivpn."
+    exit 1
+}
+
+while ip route show default dev "$VPN_IFACE" | grep -q .; do
+    ip route del default dev "$VPN_IFACE" 2>/dev/null || break
+done
+while read -r route_line; do
+    destination=$(awk '{print $1}' <<< "$route_line")
+    [[ "$destination" == "default" ]] && continue
+    ip route del "$destination" dev "$VPN_IFACE" 2>/dev/null || true
+done < <(ip route show dev "$VPN_IFACE")
+while IFS= read -r route; do
+    [[ -n "$route" ]] || continue
+    ip route replace "$route" dev "$VPN_IFACE"
+done < "$ROOT_ROUTES"
+
+HOSTS_APPLIED=1
+cleanup_hosts
+{
+    echo "$HOSTS_START"
+    grep -Ev '^[[:space:]]*(#|$)' "$ROOT_HOSTS"
+    echo "$HOSTS_END"
+} >> "$HOSTS_FILE"
+
+for test_ip in 1.1.1.1 8.8.8.8; do
+    route_dev=$(ip route get "$test_ip" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+    [[ "$route_dev" != "$VPN_IFACE" ]] || {
+        log_status "ERRO" "Rota de internet $test_ip foi desviada para $VPN_IFACE."
+        exit 1
+    }
+done
+
+INTERFACE_TEMP="$(mktemp "$RUN_DIR/.interface.XXXXXX")"
+printf '%s\n' "$VPN_IFACE" > "$INTERFACE_TEMP"
+chmod 644 "$INTERFACE_TEMP"
+sync -f "$INTERFACE_TEMP"
+PUBLISHED_IDENTITY="$(<"$IDENTITY_TEMP")"
+mv -f -- "$IDENTITY_TEMP" "$PROCESS_FILE"
+IDENTITY_TEMP=""
+IDENTITY_PUBLISHED=1
+mv -f -- "$INTERFACE_TEMP" "$IFACE_FILE"
+INTERFACE_TEMP=""
+sync -f "$RUN_DIR"
+log_status "OK" "VPN conectada pela interface $VPN_IFACE com split tunneling validado."
+unlock_transaction
+trap cleanup_after_process_exit EXIT INT TERM
+wait "$VPN_PID"

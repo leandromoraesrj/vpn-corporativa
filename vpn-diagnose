@@ -1,0 +1,368 @@
+#!/bin/bash
+set -uo pipefail
+export LC_ALL=C
+
+CURRENT_USER="$(logname 2>/dev/null || id -un 2>/dev/null || true)"
+TARGET_USER="${SUDO_USER:-$CURRENT_USER}"
+[[ -n "$TARGET_USER" && "$TARGET_USER" != "root" ]] || {
+    echo "Não foi possível identificar o usuário da sessão." >&2
+    exit 1
+}
+TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+CONFIG_DIR="$TARGET_HOME/.config/vpn"
+ROUTES_FILE="$CONFIG_DIR/routes.conf"
+HOSTS_MAP="$CONFIG_DIR/hosts.conf"
+
+FAILURES=0
+WARNINGS=0
+
+STATUS_INTERNET="OK"
+STATUS_PRIMARY="DESCONECTADA"
+STATUS_SECONDARY="NÃO DETECTADA"
+STATUS_TAILSCALE="OK"
+STATUS_LAN="OK"
+STATUS_DOCKER="OK"
+STATUS_FIREWALL="OK"
+
+ok()   { printf '[OK] %s\n' "$*"; }
+info() { printf '[INFO] %s\n' "$*"; }
+warn() { printf '[AVISO] %s\n' "$*"; WARNINGS=$((WARNINGS+1)); }
+fail() { printf '[FALHA] %s\n' "$*"; FAILURES=$((FAILURES+1)); }
+
+route_dev() {
+    ip route get "$1" 2>/dev/null |
+        awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}'
+}
+
+tcp_test() {
+    local host="$1"
+    local port="$2"
+    timeout 4 bash -c "exec 3<>/dev/tcp/$host/$port" 2>/dev/null
+}
+
+printf '============================================================\n'
+printf 'VPN CORPORATIVA — DIAGNÓSTICO DE CONECTIVIDADE\n'
+printf 'Data: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %z')"
+printf '============================================================\n\n'
+
+VPN_IFACE=""
+if [[ -r /run/vpn/interface ]]; then
+    CANDIDATE=$(< /run/vpn/interface)
+    if [[ "$CANDIDATE" =~ ^ppp[0-9]+$ ]] &&
+       ip link show up dev "$CANDIDATE" >/dev/null 2>&1; then
+        VPN_IFACE="$CANDIDATE"
+    fi
+fi
+
+if [[ -n "$VPN_IFACE" ]]; then
+    VPN_IP=$(ip -br addr show dev "$VPN_IFACE" |
+        awk '{print $3}' |
+        cut -d/ -f1)
+
+    STATUS_PRIMARY="OK"
+    ok "Interface VPN ativa: $VPN_IFACE — IP $VPN_IP"
+else
+    VPN_IP="-"
+    warn "VPN principal desconectada. Os testes gerais continuarão."
+fi
+
+printf '\n--- 1. INTERFACES E TÚNEIS ---\n'
+ip -br address show |
+    grep -Ev '^veth' || true
+
+printf '\nVPN gerenciada:\n'
+if [[ -n "$VPN_IFACE" ]]; then
+    ip -br link show "$VPN_IFACE" 2>/dev/null || true
+else
+    echo "VPN principal desconectada"
+fi
+
+printf '\nOutras VPNs/túneis:\n'
+OTHER_VPNS=$(ip -br link show |
+    awk -v managed="$VPN_IFACE" '
+        $1 != managed && $1 ~ /^(tun|tap|wg)/ {print}
+    ')
+
+if [[ -n "$OTHER_VPNS" ]]; then
+    printf '%s\n' "$OTHER_VPNS"
+    OTHER_NAMES=$(awk '{print $1}' <<< "$OTHER_VPNS" | tr '\n' ' ')
+    if grep -q '^tun0' <<< "$OTHER_VPNS"; then
+        STATUS_SECONDARY="OK (tun0)"
+        info "VPN secundária detectada em tun0."
+    else
+        STATUS_SECONDARY="ATIVA"
+        info "Outro túnel VPN detectado: $OTHER_NAMES"
+    fi
+else
+    ok "Nenhuma outra VPN/túnel ativo."
+fi
+
+printf '\nTailscale:\n'
+if ip link show tailscale0 >/dev/null 2>&1; then
+    ip -br link show tailscale0
+    ok "Tailscale detectado."
+else
+    STATUS_TAILSCALE="INATIVO"
+    warn "Tailscale não está ativo."
+fi
+
+printf '\n--- 2. INTERNET E ROTA PADRÃO ---\n'
+DEFAULT_ROUTE=$(ip route show default | head -n1)
+printf 'Rota padrão: %s\n' "${DEFAULT_ROUTE:-ausente}"
+
+if [[ -z "$DEFAULT_ROUTE" ]]; then
+    STATUS_INTERNET="FALHA"
+    fail "Rota padrão ausente."
+elif [[ -n "$VPN_IFACE" ]] &&
+     grep -qE "(^|[[:space:]])dev[[:space:]]+$VPN_IFACE([[:space:]]|$)" \
+        <<< "$DEFAULT_ROUTE"; then
+    STATUS_INTERNET="FALHA"
+    fail "A rota padrão está usando a VPN principal."
+else
+    ok "A rota padrão permanece fora da VPN principal."
+fi
+
+for ip in 1.1.1.1 8.8.8.8; do
+    dev=$(route_dev "$ip")
+
+    if [[ -z "$dev" ]]; then
+        STATUS_INTERNET="FALHA"
+        fail "Sem rota para $ip."
+    elif [[ -n "$VPN_IFACE" && "$dev" == "$VPN_IFACE" ]]; then
+        STATUS_INTERNET="FALHA"
+        fail "$ip está sendo roteado pela VPN principal."
+    elif [[ "$dev" =~ ^(tun|tap|wg) ]]; then
+        info "$ip utiliza outro túnel ativo ($dev), não a VPN principal."
+    else
+        ok "$ip usa $dev, fora da VPN principal."
+    fi
+done
+
+INTERNET_AVAILABLE=0
+if tcp_test 1.1.1.1 443; then
+    INTERNET_AVAILABLE=1
+    ok "Conectividade TCP externa disponível."
+else
+    STATUS_INTERNET="FALHA"
+    fail "Conectividade TCP externa indisponível."
+    if [[ -n "$VPN_IFACE" ]]; then
+        STATUS_PRIMARY="DEGRADADA"
+        warn "A interface VPN está ativa, mas sem conectividade de transporte."
+    fi
+fi
+
+for host in youtube.com mail.google.com; do
+    resolved=$(getent ahostsv4 "$host" | awk 'NR==1 {print $1}')
+
+    if [[ -z "$resolved" ]]; then
+        STATUS_INTERNET="FALHA"
+        fail "Falha ao resolver $host."
+        continue
+    fi
+
+    dev=$(route_dev "$resolved")
+
+    if [[ -n "$VPN_IFACE" && "$dev" == "$VPN_IFACE" ]]; then
+        STATUS_INTERNET="FALHA"
+        fail "$host está sendo roteado pela VPN principal."
+    else
+        ok "$host resolve para $resolved e usa ${dev:-rota desconhecida}."
+    fi
+
+    if tcp_test "$host" 443; then
+        ok "$host:443 acessível."
+    else
+        warn "$host:443 não respondeu."
+    fi
+done
+
+printf '\n--- 3. REDE LOCAL ---\n'
+LOCAL_ROUTES=$(ip route show scope link |
+    grep -Ev '(^| )dev (ppp|docker|br-|veth|tailscale)' || true)
+
+if [[ -n "$LOCAL_ROUTES" ]]; then
+    printf '%s\n' "$LOCAL_ROUTES"
+    ok "Rotas locais permanecem instaladas."
+else
+    STATUS_LAN="AVISO"
+    warn "Nenhuma rota local física foi identificada."
+fi
+
+GATEWAY=$(ip route show default | awk '{print $3; exit}')
+if [[ -n "$GATEWAY" ]]; then
+    gateway_dev=$(route_dev "$GATEWAY")
+
+    if [[ -n "$VPN_IFACE" && "$gateway_dev" == "$VPN_IFACE" ]]; then
+        STATUS_LAN="FALHA"
+        fail "Gateway local está usando a VPN principal."
+    else
+        ok "Gateway local $GATEWAY usa ${gateway_dev:-interface desconhecida}."
+    fi
+fi
+
+printf '\n--- 4. TAILSCALE ---\n'
+if ip link show tailscale0 >/dev/null 2>&1; then
+    TS_DEV=$(route_dev "100.100.100.100")
+
+    if [[ "$TS_DEV" == "tailscale0" ]]; then
+        ok "Rede Tailscale usa tailscale0."
+    else
+        STATUS_TAILSCALE="AVISO"
+        warn "Rota Tailscale inesperada: ${TS_DEV:-ausente}."
+    fi
+
+    if command -v tailscale >/dev/null 2>&1; then
+        SELF_IP=$(tailscale ip -4 2>/dev/null | head -n1)
+        PEER_IP=$(tailscale status 2>/dev/null |
+            awk -v self="$SELF_IP" '
+                $1 ~ /^100\./ && $1 != self && $0 !~ /offline/ {
+                    print $1
+                    exit
+                }
+            ')
+
+        if [[ -n "$PEER_IP" ]]; then
+            if tailscale ping --timeout=3s "$PEER_IP" >/dev/null 2>&1; then
+                ok "Conectividade Tailscale confirmada com $PEER_IP."
+            else
+                STATUS_TAILSCALE="AVISO"
+                warn "Não foi possível confirmar conectividade Tailscale."
+            fi
+        fi
+    fi
+fi
+
+printf '\n--- 5. DOCKER ---\n'
+DOCKER_ROUTES=$(ip route show |
+    grep -E ' dev (docker0|br-[[:xdigit:]]+)' || true)
+
+if [[ -n "$DOCKER_ROUTES" ]]; then
+    printf '%s\n' "$DOCKER_ROUTES"
+    ok "Rotas Docker permanecem instaladas."
+else
+    STATUS_DOCKER="AVISO"
+    warn "Nenhuma rota de bridge Docker encontrada."
+fi
+
+printf '\n--- 6. VPN PRINCIPAL — ROTAS CORPORATIVAS ---\n'
+if [[ -z "$VPN_IFACE" ]]; then
+    warn "Teste ignorado: VPN principal desconectada."
+elif [[ ! -r "$ROUTES_FILE" ]]; then
+    STATUS_PRIMARY="FALHA"
+    fail "Arquivo de rotas ausente: $ROUTES_FILE"
+else
+    while IFS= read -r cidr; do
+        cidr="${cidr%%#*}"
+        cidr="${cidr//[[:space:]]/}"
+        [[ -n "$cidr" ]] || continue
+
+        test_ip="${cidr%/*}"
+        dev=$(route_dev "$test_ip")
+
+        if [[ "$dev" == "$VPN_IFACE" ]]; then
+            ok "$cidr usa $VPN_IFACE."
+        else
+            STATUS_PRIMARY="FALHA"
+            fail "$cidr usa ${dev:-nenhuma interface}, esperado $VPN_IFACE."
+        fi
+    done < "$ROUTES_FILE"
+fi
+
+printf '\n--- 7. VPN PRINCIPAL — MAPA DE HOSTS ---\n'
+if [[ -z "$VPN_IFACE" ]]; then
+    warn "Teste ignorado: VPN principal desconectada."
+elif [[ ! -r "$HOSTS_MAP" ]]; then
+    STATUS_PRIMARY="FALHA"
+    fail "Arquivo de hosts ausente: $HOSTS_MAP"
+else
+    while read -r expected_ip hostname extra; do
+        [[ -n "${expected_ip:-}" && -n "${hostname:-}" ]] || continue
+        [[ "$expected_ip" == \#* ]] && continue
+
+        resolved=$(getent ahostsv4 "$hostname" | awk 'NR==1 {print $1}')
+
+        if [[ "$resolved" == "$expected_ip" ]]; then
+            ok "$hostname resolve para $expected_ip."
+        elif [[ -z "$resolved" ]]; then
+            STATUS_PRIMARY="FALHA"
+            fail "$hostname não foi resolvido."
+        else
+            STATUS_PRIMARY="FALHA"
+            fail "$hostname resolve para $resolved, esperado $expected_ip."
+        fi
+
+        dev=$(route_dev "$expected_ip")
+        if [[ "$dev" == "$VPN_IFACE" ]]; then
+            ok "$expected_ip usa $VPN_IFACE."
+        else
+            STATUS_PRIMARY="FALHA"
+            fail "$expected_ip usa ${dev:-nenhuma interface}, esperado $VPN_IFACE."
+        fi
+
+        if (( INTERNET_AVAILABLE == 0 )); then
+            info "$expected_ip não foi testado por ping: Internet indisponível."
+        elif ping -c 1 -W 1 "$expected_ip" >/dev/null 2>&1; then
+            ok "$expected_ip respondeu ao ping."
+        else
+            info "$expected_ip está corretamente roteado; ICMP aparentemente bloqueado."
+        fi
+    done < "$HOSTS_MAP"
+fi
+
+printf '\n--- 8. FIREWALL UFW ---\n'
+if command -v ufw >/dev/null 2>&1; then
+    UFW_STATUS=$(ufw status verbose 2>&1)
+    printf '%s\n' "$UFW_STATUS"
+
+    if grep -qiE '^(Status:[[:space:]]*active|Estado:[[:space:]]*ativo)' \
+        <<< "$UFW_STATUS"; then
+        ok "UFW está ativo."
+    else
+        STATUS_FIREWALL="AVISO"
+        warn "UFW não parece estar ativo."
+    fi
+
+    if grep -qiE 'deny out|reject out|negar saída|rejeitar saída' \
+        <<< "$UFW_STATUS"; then
+        STATUS_FIREWALL="AVISO"
+        warn "Existem regras explícitas de bloqueio de saída."
+    else
+        ok "Nenhuma regra explícita de bloqueio de saída foi detectada."
+    fi
+else
+    STATUS_FIREWALL="AVISO"
+    warn "UFW não está instalado."
+fi
+
+printf '\n--- 9. CAMADAS DE FIREWALL ---\n'
+if command -v nft >/dev/null 2>&1; then
+    NFT_COUNT=$(nft list ruleset 2>/dev/null |
+        grep -cE '^[[:space:]]*(table|chain|ip |ip6 |tcp |udp )' || true)
+    ok "nftables disponível; regras contabilizadas: $NFT_COUNT."
+fi
+
+if command -v iptables >/dev/null 2>&1; then
+    IPT_OUT=$(iptables -S OUTPUT 2>/dev/null || true)
+
+    if grep -qE -- '-j (DROP|REJECT)' <<< "$IPT_OUT"; then
+        STATUS_FIREWALL="AVISO"
+        warn "Existem regras DROP/REJECT na cadeia OUTPUT."
+    else
+        ok "Nenhum DROP/REJECT explícito na cadeia OUTPUT."
+    fi
+fi
+
+printf '\n--- 10. RESUMO POR COMPONENTE ---\n'
+printf 'Internet:    %s\n' "$STATUS_INTERNET"
+printf 'Principal:   %s\n' "$STATUS_PRIMARY"
+printf 'Secundária:  %s\n' "$STATUS_SECONDARY"
+printf 'Tailscale:   %s\n' "$STATUS_TAILSCALE"
+printf 'LAN:         %s\n' "$STATUS_LAN"
+printf 'Docker:      %s\n' "$STATUS_DOCKER"
+printf 'Firewall:    %s\n' "$STATUS_FIREWALL"
+
+printf '\n============================================================\n'
+printf 'RESUMO: %d falha(s), %d aviso(s)\n' "$FAILURES" "$WARNINGS"
+printf '============================================================\n'
+
+(( FAILURES == 0 ))

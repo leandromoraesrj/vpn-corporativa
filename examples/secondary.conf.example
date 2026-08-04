@@ -1,0 +1,4 @@
+# Configuração opcional da VPN secundária.
+# Copie para ~/.config/vpn/secondary.conf e substitua pelos valores autorizados.
+route =
+portal-url =

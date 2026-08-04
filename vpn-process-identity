@@ -1,0 +1,73 @@
+#!/bin/bash
+
+process_starttime() {
+    local pid="$1" stat_line remainder
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    IFS= read -r stat_line < "/proc/$pid/stat" || return 1
+    remainder="${stat_line##*) }"
+    read -r -a fields <<< "$remainder"
+    ((${#fields[@]} >= 20)) || return 1
+    printf '%s\n' "${fields[19]}"
+}
+
+write_process_identity() {
+    local pid="$1" expected_exe="$2" expected_conf="$3" state_file="$4"
+    local actual_exe starttime temporary
+    actual_exe="$(readlink -f "/proc/$pid/exe")" || return 1
+    [[ "$actual_exe" == "$expected_exe" ]] || return 1
+    starttime="$(process_starttime "$pid")" || return 1
+
+    temporary="$(umask 077; mktemp "${state_file}.tmp.XXXXXX")" || return 1
+    {
+        printf 'pid=%s\n' "$pid"
+        printf 'starttime=%s\n' "$starttime"
+        printf 'executable=%s\n' "$expected_exe"
+        printf 'config=%s\n' "$expected_conf"
+    } > "$temporary" || {
+        rm -f -- "$temporary"
+        return 1
+    }
+    chmod 600 "$temporary" || {
+        rm -f -- "$temporary"
+        return 1
+    }
+    sync -f "$temporary" || {
+        rm -f -- "$temporary"
+        return 1
+    }
+    mv -f -- "$temporary" "$state_file" || {
+        rm -f -- "$temporary"
+        return 1
+    }
+    sync -f "$(dirname -- "$state_file")"
+}
+
+verify_process_identity() {
+    local state_file="$1"
+    local pid="" starttime="" executable="" config="" key value
+    [[ -f "$state_file" && ! -L "$state_file" ]] || return 1
+    while IFS='=' read -r key value; do
+        case "$key" in
+            pid) pid="$value" ;;
+            starttime) starttime="$value" ;;
+            executable) executable="$value" ;;
+            config) config="$value" ;;
+            *) return 1 ;;
+        esac
+    done < "$state_file"
+
+    [[ "$pid" =~ ^[0-9]+$ && "$starttime" =~ ^[0-9]+$ ]] || return 1
+    [[ -n "$executable" && -n "$config" ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    [[ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" == "$executable" ]] || return 1
+    [[ "$(process_starttime "$pid" 2>/dev/null)" == "$starttime" ]] || return 1
+
+    local -a arguments=()
+    mapfile -d '' -t arguments < "/proc/$pid/cmdline" || return 1
+    ((${#arguments[@]} == 3)) || return 1
+    local argument_exe=""
+    argument_exe="$(readlink -f "$(command -v "${arguments[0]}" 2>/dev/null)" 2>/dev/null)" || true
+    [[ "${arguments[0]}" == "$executable" || "$argument_exe" == "$executable" ]] || return 1
+    [[ "${arguments[1]}" == "-c" && "${arguments[2]}" == "$config" ]] || return 1
+    printf '%s\n' "$pid"
+}

@@ -1,0 +1,4 @@
+# Formato: IPv4 hostname
+# Substitua os exemplos reservados pelos hosts autorizados do seu ambiente.
+192.0.2.10 intranet.example.com
+198.51.100.20 service.example.net

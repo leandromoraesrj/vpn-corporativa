@@ -1,0 +1,56 @@
+#!/bin/bash
+set -euo pipefail
+
+readonly RUN_DIR="/run/vpn"
+readonly CONTROL_LOCK="/run/lock/vpn-corporativa.lock"
+readonly PROCESS_FILE="$RUN_DIR/openfortivpn.process"
+readonly IFACE_FILE="$RUN_DIR/interface"
+readonly ROUTE_STATE="$RUN_DIR/route_state.txt"
+readonly SNAPSHOT_DIR="$RUN_DIR/config"
+readonly HOSTS_FILE="/etc/hosts"
+readonly PROCESS_IDENTITY="/usr/local/libexec/vpn-process-identity"
+
+source "$PROCESS_IDENTITY"
+
+cleanup_hosts() {
+    sed -i '/# INICIO MAPA VPN/,/# FIM MAPA VPN/d' "$HOSTS_FILE"
+}
+
+terminate_managed_process() {
+    local pid
+    pid="$(verify_process_identity "$PROCESS_FILE" 2>/dev/null)" || return 0
+    kill -TERM "$pid" 2>/dev/null || true
+    for _ in {1..20}; do
+        pid="$(verify_process_identity "$PROCESS_FILE" 2>/dev/null)" || return 0
+        sleep 0.25
+    done
+    pid="$(verify_process_identity "$PROCESS_FILE" 2>/dev/null)" || return 0
+    kill -KILL "$pid" 2>/dev/null || true
+}
+
+interface_references_active_link() {
+    local interface=""
+    [[ -f "$IFACE_FILE" && ! -L "$IFACE_FILE" ]] || return 1
+    IFS= read -r interface < "$IFACE_FILE" || return 1
+    [[ "$interface" =~ ^ppp[0-9]+$ ]] || return 1
+    ip link show up dev "$interface" >/dev/null 2>&1
+}
+
+exec 9>"$CONTROL_LOCK"
+flock -x 9
+
+if verify_process_identity "$PROCESS_FILE" >/dev/null 2>&1; then
+    terminate_managed_process
+    cleanup_hosts
+    rm -f -- "$PROCESS_FILE" "$IFACE_FILE" "$ROUTE_STATE"
+    rm -rf -- "$SNAPSHOT_DIR"
+elif [[ ! -e "$PROCESS_FILE" ]] && ! interface_references_active_link; then
+    cleanup_hosts
+    rm -f -- "$IFACE_FILE" "$ROUTE_STATE"
+    rm -rf -- "$SNAPSHOT_DIR"
+else
+    echo "Estado de processo inválido; nenhuma conexão ativa foi alterada." >&2
+    exit 1
+fi
+
+flock -u 9

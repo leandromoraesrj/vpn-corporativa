@@ -1,0 +1,77 @@
+# VPN Corporativa 1.0 — Revisada
+
+Versão baseada na revisão do Codex, com correções adicionais de robustez,
+instalação, auditoria e gerenciamento de processos.
+
+## Correções consolidadas
+
+- identificação exclusiva da interface PPP gerenciada;
+- proteção contra conflito com outras conexões PPP;
+- validação de porta e bloqueio de caracteres de controle;
+- mensagens claras ao salvar configurações inválidas;
+- validação numérica do IPv4 público;
+- Docker e Tailscale tratados como opcionais;
+- dependências sem uso removidas;
+- resolução segura de usuário e grupo principal;
+- validação inicial compartilhada entre instalador e aplicação;
+- encerramento do processo de conexão após timeout;
+- logs persistentes em `~/.local/state/vpn`;
+- auditoria sem acúmulo de relatórios;
+- remoção de resíduos antigos em `/tmp`;
+- nome visual estável como **VPN Corporativa**;
+- correção da chamada duplicada ao finalizar o diagnóstico.
+
+## Validação automatizada
+
+A release é validada por testes unitários, análise de sintaxe Python e Bash e
+verificações estáticas dos arquivos do instalador. Esses testes não conectam à
+VPN real e não alteram rotas, `/etc/hosts` ou firewall.
+
+## Validação manual
+
+A validação manual registrada em `VALIDATION.md` confirmou:
+
+- conexão e desconexão;
+- rota padrão fora da interface PPP;
+- split tunneling;
+- Internet e rede local;
+- coexistência com a VPN secundária, Tailscale e Docker;
+- reconexão após queda;
+- diagnóstico completo.
+## Revisão de segurança
+
+- senha da configuração inicial transmitida ao validador pela entrada
+  padrão, sem exposição nos argumentos do processo;
+- helper privilegiado revalida `connection.conf`, `routes.conf` e
+  `hosts.conf` antes de alterar rede, rotas ou `/etc/hosts`;
+- links simbólicos e diretivas desconhecidas são rejeitados;
+- timeout direto do `vpn-connect` usa TERM, espera limitada e KILL como
+  último recurso;
+- auditoria do sudoers funciona tanto como root quanto como usuário comum,
+  sem pressupor autorização para executar `visudo` sem senha;
+- testes de regressão ampliados.
+
+
+## Revisão de validação de hosts
+
+- aliases internos em `hosts.conf` agora podem conter `_`;
+- a regra continua rejeitando espaços, barras, dois-pontos, caracteres de
+  controle, labels vazios e pontuação inválida nas extremidades;
+- incluído teste específico para aliases internos com `_`.
+
+
+## Revisão de encerramento
+
+- a opção **Sair** agora executa `vpn-disconnect` antes de encerrar o GTK;
+- o estado de reconexão automática é desativado antes da desconexão;
+- a aplicação aguarda até 20 segundos pelo helper;
+- fechar apenas a janela continua ocultando o aplicativo e mantém a VPN,
+  enquanto **Sair** encerra a VPN e o programa.
+
+## Revisão de credenciais
+
+- o parser privilegiado remove apenas o único espaço de formatação após `=` na diretiva `password`;
+- espaços adicionais no início e no fim da senha são preservados como parte da credencial;
+- a leitura da configuração pela interface segue a mesma regra;
+- senha formada somente por espaços continua inválida;
+- adicionados testes específicos de regressão.
