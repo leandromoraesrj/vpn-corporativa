@@ -85,6 +85,10 @@ def window_controls_enabled(current: F5Status) -> bool:
     return bool(current.window_id)
 
 
+def window_visible() -> bool:
+    return bool(_run(["xdotool", "search", "--onlyvisible", "--class", F5_WINDOW_CLASS]))
+
+
 def _run(command: list[str], timeout: float = 4.0) -> str:
     try:
         result = subprocess.run(

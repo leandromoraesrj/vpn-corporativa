@@ -1,6 +1,6 @@
 # Registro de validação
 
-## Versão 1.1.0 — 07/08/2026
+## Versão 1.1.1 — 07/08/2026
 
 ### Validação isolada
 
@@ -49,3 +49,10 @@ Nenhum novo problema foi relatado após a validação final.
 6. Confirmar que a rota padrão não usa a PPP corporativa.
 7. Testar Internet, LAN, Docker, Tailscale e outros túneis ativos.
 8. Executar `~/.local/share/vpn/auditar_vpn.sh`.
+
+## Bandeja e painel
+
+- o ícone da bandeja representa independentemente as duas VPNs;
+- os itens do menu alternam conexão/autenticação e acompanham os botões do painel;
+- abrir o painel pelo tray repete o teste de integridade e traz a janela para
+  frente sem mantê-la sempre sobreposta.

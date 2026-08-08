@@ -21,7 +21,7 @@ from . import config_store, f5_backend, network, secret_store
 
 LOGGER = logging.getLogger(__name__)
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 APP_NAME = "VPN Corporativa"
 APP_ID = "br.local.vpncorporativa"
 CONNECT_HELPER = "/usr/local/libexec/vpn-connect"
@@ -37,6 +37,14 @@ ICON_OFF = "/usr/local/share/icons/vpn-corporativa-gray.svg"
 ICON_WAIT = "/usr/local/share/icons/vpn-corporativa-yellow.svg"
 ICON_ON = "/usr/local/share/icons/vpn-corporativa-green.svg"
 ICON_ERROR = "/usr/local/share/icons/vpn-corporativa-red.svg"
+ICON_PRIMARY = "/usr/local/share/icons/vpn-corporativa-primary.svg"
+ICON_SECONDARY = "/usr/local/share/icons/vpn-corporativa-secondary.svg"
+ICON_COLORS = {
+    "off": "#7a7a7a",
+    "wait": "#e69f00",
+    "on": "#2ca02c",
+    "error": "#c0392b",
+}
 
 
 class VPNApplication:
@@ -66,6 +74,7 @@ class VPNApplication:
         self.initial_target_height: int | None = None
 
         self.is_connecting = False
+        self.primary_error = False
         self.desired_connected = False
         self.reconnect_in_progress = False
         self.reconnect_status = ""
@@ -76,6 +85,8 @@ class VPNApplication:
         self.f5_window_buttons: list[Gtk.Button] = []
         self.menu_primary_status: Gtk.MenuItem | None = None
         self.menu_secondary_status: Gtk.MenuItem | None = None
+        self.menu_primary_action: Gtk.MenuItem | None = None
+        self.menu_secondary_action: Gtk.MenuItem | None = None
         self.status_update_label: Gtk.Label | None = None
         self.status_diagnostic_label: Gtk.Label | None = None
         self.status_integrity_label: Gtk.Label | None = None
@@ -103,6 +114,8 @@ class VPNApplication:
 
 
     def _primary_status_text(self) -> str:
+        if self.primary_error:
+            return "ERRO"
         if self.reconnect_status:
             return self.reconnect_status
         if self.is_connecting:
@@ -118,22 +131,98 @@ class VPNApplication:
         secondary = self._secondary_status_text().lower()
         return f"VPN Corporativa — Principal: {primary} | Secundária: {secondary}"
 
+    @staticmethod
+    def _connected_icon(primary_connected: bool, secondary_connected: bool) -> str:
+        if primary_connected and secondary_connected:
+            return ICON_ON
+        if primary_connected:
+            return ICON_PRIMARY
+        if secondary_connected:
+            return ICON_SECONDARY
+        return ICON_OFF
+
+    @staticmethod
+    def _split_icon_svg(primary_color: str, secondary_color: str) -> str:
+        return f'''<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <clipPath id="left"><rect x="0" y="0" width="32" height="64"/></clipPath>
+    <clipPath id="right"><rect x="32" y="0" width="32" height="64"/></clipPath>
+  </defs>
+  <path d="M32 4 54 12 51 39 42 52 32 60 22 52 13 39 10 12Z" fill="{secondary_color}" stroke="#fff" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M32 4 54 12 51 39 42 52 32 60 22 52 13 39 10 12Z" fill="{primary_color}" clip-path="url(#left)"/>
+  <rect x="20" y="27" width="24" height="18" rx="4" fill="#fff"/>
+  <path d="M24 28V23c0-6 3.5-10.5 8-10.5S40 17 40 23v5" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+</svg>
+'''
+
+    def _split_icon_path(self, primary_state: str, secondary_state: str) -> str:
+        if primary_state == "on" and secondary_state == "on":
+            return ICON_ON
+        if primary_state == "on" and secondary_state == "off":
+            return ICON_PRIMARY
+        if primary_state == "off" and secondary_state == "on":
+            return ICON_SECONDARY
+        if primary_state == "off" and secondary_state == "off":
+            return ICON_OFF
+
+        path = STATE_DIR / f"tray-icon-{primary_state}-{secondary_state}.svg"
+        if not path.exists():
+            path.write_text(
+                self._split_icon_svg(
+                    ICON_COLORS[primary_state], ICON_COLORS[secondary_state]
+                ),
+                encoding="utf-8",
+            )
+        return str(path)
+
+    def _tray_states(self) -> tuple[str, str]:
+        f5 = f5_backend.status()
+        if self.primary_error:
+            primary = "error"
+        elif self.is_connecting or self.reconnect_status:
+            primary = "wait"
+        elif network.vpn_interface():
+            primary = "on"
+        else:
+            primary = "off"
+
+        if f5.inconsistent:
+            secondary = "error"
+        elif f5.connected:
+            secondary = "on"
+        elif f5.client_running:
+            secondary = "wait"
+        else:
+            secondary = "off"
+        return primary, secondary
+
+    def _tray_icon(self) -> str:
+        primary, secondary = self._tray_states()
+        return self._split_icon_path(primary, secondary)
+
     def can_connect(self, _item=None) -> bool:
         return not self.is_connecting and not bool(network.vpn_interface())
 
     def can_disconnect(self, _item=None) -> bool:
         return self.is_connecting or bool(network.vpn_interface())
 
-    def _build_indicator(self):
-        f5 = f5_backend.status()
-        if self.last_connected and f5.connected:
-            icon = ICON_ON
-        elif self.last_connected or f5.connected or (f5.client_running and not f5.inconsistent):
-            icon = ICON_WAIT
-        elif f5.inconsistent:
-            icon = ICON_ERROR
+    def _activate_primary_menu(self, _item=None) -> None:
+        if self.can_disconnect():
+            self.disconnect_vpn()
         else:
-            icon = ICON_OFF
+            self.connect_vpn()
+
+    def _activate_secondary_menu(self, _item=None) -> None:
+        current = f5_backend.status()
+        if current.connected and f5_backend.window_visible():
+            self.hide_f5()
+        elif current.connected:
+            self.show_f5()
+        else:
+            self.open_f5()
+
+    def _build_indicator(self):
+        icon = self._tray_icon()
         indicator = AyatanaAppIndicator3.Indicator.new(
             APP_ID,
             icon,
@@ -145,6 +234,12 @@ class VPNApplication:
 
         menu = Gtk.Menu()
 
+        open_item = Gtk.MenuItem(label="Abrir painel de vpn corporativa")
+        open_item.connect("activate", lambda *_: self._open_panel_from_tray())
+        menu.append(open_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
         self.menu_primary_status = Gtk.MenuItem(label="Principal: verificando...")
         self.menu_primary_status.set_sensitive(False)
         menu.append(self.menu_primary_status)
@@ -155,9 +250,13 @@ class VPNApplication:
 
         menu.append(Gtk.SeparatorMenuItem())
 
-        open_item = Gtk.MenuItem(label="Abrir VPN Corporativa")
-        open_item.connect("activate", lambda *_: self.show_window())
-        menu.append(open_item)
+        self.menu_primary_action = Gtk.MenuItem(label="Conectar VPN principal")
+        self.menu_primary_action.connect("activate", self._activate_primary_menu)
+        menu.append(self.menu_primary_action)
+
+        self.menu_secondary_action = Gtk.MenuItem(label="Autenticar VPN secundária")
+        self.menu_secondary_action.connect("activate", self._activate_secondary_menu)
+        menu.append(self.menu_secondary_action)
 
         menu.append(Gtk.SeparatorMenuItem())
 
@@ -173,31 +272,30 @@ class VPNApplication:
         connected = bool(network.vpn_interface())
         f5 = f5_backend.status()
 
-        if f5.inconsistent or "FALHOU" in self.reconnect_status:
-            icon = ICON_ERROR
-        elif connected and f5.connected:
-            icon = ICON_ON
-        elif (
-            connected
-            or f5.connected
-            or self.reconnect_status
-            or self.is_connecting
-            or (f5.client_running and not f5.connected)
-        ):
-            icon = ICON_WAIT
-        else:
-            icon = ICON_OFF
+        icon = self._tray_icon()
 
         title = self._tray_title()
         self.indicator.set_icon_full(icon, title)
         self.indicator.set_title(title)
         if self.menu_primary_status is not None:
-            self.menu_primary_status.set_label(
-                f"Principal: {self._primary_status_text()}"
-            )
+            self.menu_primary_status.set_label(f"Principal: {self._primary_status_text()}")
         if self.menu_secondary_status is not None:
-            self.menu_secondary_status.set_label(
-                f"Secundária: {self._secondary_status_text()}"
+            self.menu_secondary_status.set_label(f"Secundária: {self._secondary_status_text()}")
+        if self.menu_primary_action is not None:
+            self.menu_primary_action.set_label(
+                "Desconectar VPN principal"
+                if self.can_disconnect()
+                else "Conectar VPN principal"
+            )
+        if self.menu_secondary_action is not None:
+            self.menu_secondary_action.set_label(
+                (
+                    "Ocultar F5"
+                    if f5_backend.window_visible()
+                    else "Exibir F5"
+                )
+                if f5.connected
+                else "Autenticar VPN secundária"
             )
 
         if self.connect_button is not None:
@@ -226,7 +324,7 @@ class VPNApplication:
         subprocess.run(["notify-send", APP_NAME, message], check=False)
 
     def _build_window(self) -> None:
-        window = Gtk.Window(title=f"VPN Corporativa {APP_VERSION}")
+        window = Gtk.Window(title="Painel VPN Corporativa - Centro de Controle da Rede")
         window.set_default_size(820, -1)
         window.set_position(Gtk.WindowPosition.CENTER)
         window.connect("realize", self._disable_window_maximize)
@@ -238,7 +336,7 @@ class VPNApplication:
         window.add(root)
 
         title = Gtk.Label()
-        title.set_markup("<span size='x-large' weight='bold'>VPN Corporativa — Centro de Controle da Rede</span>")
+        title.set_markup("<span size='x-large' weight='bold'>Painel VPN Corporativa — Centro de Controle da Rede</span>")
         title.set_xalign(0)
         root.pack_start(title, False, False, 0)
 
@@ -248,7 +346,7 @@ class VPNApplication:
 
         notebook.append_page(
             self._build_summary_tab(),
-            Gtk.Label(label="Painel Principal"),
+            Gtk.Label(label="Principal"),
         )
         notebook.append_page(self._build_diagnostic_tab(), Gtk.Label(label="Diagnóstico"))
         notebook.append_page(self._build_logs_tab(), Gtk.Label(label="Log da conexão"))
@@ -819,6 +917,18 @@ class VPNApplication:
             return f"<span foreground='#c62828'><b>Integridade — Falha:</b> {details}</span>"
         return "<span foreground='#2e7d32'><b>Integridade: OK</b></span>"
 
+    def _refresh_integrity_status(self) -> bool:
+        self.integrity_status_markup = self._check_integrity_markup()
+        if self.status_integrity_label is not None:
+            self.status_integrity_label.set_markup(self.integrity_status_markup)
+        if "Integridade — Falha:" in self.integrity_status_markup:
+            self._notify("Falha no teste de integridade. Consulte o status do painel.")
+        return "Integridade — Falha:" not in self.integrity_status_markup
+
+    def _open_panel_from_tray(self, _item=None) -> None:
+        self._refresh_integrity_status()
+        self.show_window()
+
     @staticmethod
     def _stop_connect_process(process: subprocess.Popen) -> None:
         if process.poll() is not None:
@@ -847,6 +957,7 @@ class VPNApplication:
         self.desired_connected = True
         self.manual_disconnect = False
         self.is_connecting = True
+        self.primary_error = False
         self._refresh_controls()
 
         def worker():
@@ -883,6 +994,7 @@ class VPNApplication:
 
     def _connection_established(self) -> bool:
         self.is_connecting = False
+        self.primary_error = False
         self.last_connected = True
         self.connected_since = time.monotonic()
         self._refresh_controls()
@@ -890,18 +1002,11 @@ class VPNApplication:
 
     def _connection_failed(self, _return_code: int) -> bool:
         self.is_connecting = False
+        self.primary_error = True
         self.last_connected = False
         if not self.reconnect_in_progress:
             self.desired_connected = False
-        self.indicator.set_icon_full(ICON_ERROR, "VPN Corporativa — erro de conexão")
-        self.indicator.set_title("VPN Corporativa — erro de conexão")
-        if self.menu_primary_status is not None:
-            self.menu_primary_status.set_label("Principal: ERRO DE CONEXÃO")
-
-        if self.connect_button is not None:
-            self.connect_button.set_sensitive(True)
-        if self.disconnect_button is not None:
-            self.disconnect_button.set_sensitive(False)
+        self._refresh_controls()
 
         self._notify("Falha ao conectar. Consulte o Log da conexão.")
         return False
@@ -915,6 +1020,7 @@ class VPNApplication:
         self.desired_connected = False
         self.reconnect_in_progress = False
         self.reconnect_status = ""
+        self.primary_error = False
         subprocess.run(["sudo", "-n", DISCONNECT_HELPER], check=False)
         self.is_connecting = False
         self.last_connected = False
@@ -936,6 +1042,7 @@ class VPNApplication:
 
         self.reconnect_in_progress = True
         self.is_connecting = True
+        self.primary_error = False
         self.reconnect_status = "AGUARDANDO INTERNET"
         self._refresh_controls()
 
@@ -1006,6 +1113,7 @@ class VPNApplication:
         self.reconnect_in_progress = False
         self.reconnect_status = ""
         self.is_connecting = False
+        self.primary_error = False
         self.last_connected = True
         self.connected_since = time.monotonic()
         self._refresh_controls()
@@ -1014,18 +1122,11 @@ class VPNApplication:
     def _finish_reconnect_failed(self) -> bool:
         self.reconnect_in_progress = False
         self.is_connecting = False
+        self.primary_error = True
         self.last_connected = False
         self.desired_connected = False
         self.reconnect_status = ""
-        self.indicator.set_icon_full(ICON_ERROR, "VPN Corporativa — reconexão falhou")
-        self.indicator.set_title("VPN Corporativa — reconexão falhou")
-        if self.menu_primary_status is not None:
-            self.menu_primary_status.set_label("Principal: RECONEXÃO FALHOU")
-
-        if self.connect_button is not None:
-            self.connect_button.set_sensitive(True)
-        if self.disconnect_button is not None:
-            self.disconnect_button.set_sensitive(False)
+        self._refresh_controls()
 
         self._notify(
             "Não foi possível restabelecer a VPN após 3 tentativas."
@@ -1043,6 +1144,7 @@ class VPNApplication:
         ok, message = f5_backend.launch()
         if not ok:
             self._notify(message)
+        self._refresh_controls()
         if ok and self.window is not None and self.window.get_visible():
             self._visible_update()
 
@@ -1056,16 +1158,22 @@ class VPNApplication:
         ok, message = f5_backend.show_window()
         if not ok:
             self._notify(message)
+        self._refresh_controls()
 
     def _watch_f5(self) -> None:
         current = f5_backend.status()
+        changed = False
         if current.connected and not self.f5_last_connected:
             self.f5_last_connected = True
+            changed = True
             if self.hide_f5(notify=False):
                 self.f5_auto_hidden = True
         elif not current.connected and self.f5_last_connected:
             self.f5_last_connected = False
             self.f5_auto_hidden = False
+            changed = True
+        if changed:
+            self._refresh_controls()
 
     def run_diagnostic(self) -> None:
         if self.diagnostic_running:
@@ -1379,7 +1487,13 @@ class VPNApplication:
             self._load_config_into_ui()
         assert self.window is not None
         self.window.show_all()
-        self.window.present()
+        self.window.set_keep_above(False)
+        timestamp = Gtk.get_current_event_time()
+        self.window.present_with_time(timestamp)
+        self.window.grab_focus()
+        native_window = self.window.get_window()
+        if native_window is not None:
+            native_window.focus(timestamp)
         self._refresh_controls()
         self._visible_update()
         if first_show:

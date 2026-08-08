@@ -29,7 +29,7 @@ DESKTOP_DIR="$(sudo -u "$TARGET_USER" xdg-user-dir DESKTOP 2>/dev/null || true)"
 
 clear
 echo "============================================================"
-echo "VPN CORPORATIVA 1.1.0 — PRODUÇÃO"
+echo "VPN CORPORATIVA 1.1.1 — PRODUÇÃO"
 echo "============================================================"
 echo
 echo "Este instalador:"
@@ -128,6 +128,11 @@ for state in gray yellow green red; do
     install -m 644 \
         "$SCRIPT_DIR/vpn-corporativa-${state}.svg" \
         "/usr/local/share/icons/vpn-corporativa-${state}.svg"
+done
+for split_state in primary secondary; do
+    install -m 644 \
+        "$SCRIPT_DIR/vpn-corporativa-${split_state}.svg" \
+        "/usr/local/share/icons/vpn-corporativa-${split_state}.svg"
 done
 
 if [[ ! -f "$CONFIG_DIR/connection.conf" ]]; then
@@ -257,7 +262,7 @@ fi
 python3 -m py_compile "$APP_DIR/vpn.py" "$APP_DIR"/vpn_app/*.py
 
 echo
-echo "VPN Corporativa 1.1.0 instalada com sucesso."
+echo "VPN Corporativa 1.1.1 instalada com sucesso."
 echo "A auditoria específica está em:"
 echo "  $APP_DIR/auditar_vpn.sh"
 echo

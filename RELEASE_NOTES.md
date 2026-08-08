@@ -1,14 +1,19 @@
-# VPN Corporativa 1.1.0 — Segurança de credenciais
+# VPN Corporativa 1.1.1 — Ícone e menu
 
 Esta versão corrige a documentação de compatibilidade e a nomenclatura técnica
 da VPN principal, sem alterar funcionalidades.
 
-## Alterações da versão 1.1.0
+## Alterações da versão 1.1.1
 
 - senha da VPN principal armazenada no GNOME Keyring via Secret Service;
 - configuração transitória do `openfortivpn` criada em `memfd` selado;
 - snapshots, argumentos, ambiente e logs sem a credencial;
 - migração legada e remoção opcional do segredo no uninstall.
+- ícone da bandeja dividido entre as duas VPNs, com menu sincronizado
+  aos controles do painel.
+- status independente por metade, incluindo espera, conexão e erro;
+- menu com abertura do painel, estados informativos e alternância dos comandos;
+- título, aba principal e foco da janela revisados.
 
 ## Correções consolidadas da versão anterior
 

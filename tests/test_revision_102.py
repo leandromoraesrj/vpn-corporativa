@@ -35,13 +35,13 @@ class Revision102Tests(unittest.TestCase):
         self.assertIn('TARGET_GROUP="$(id -gn "$TARGET_USER")"', installer)
         self.assertNotIn('-g "$TARGET_USER"', installer)
         self.assertIn('Name=VPN Corporativa', installer)
-        self.assertIn('VPN CORPORATIVA 1.1.0 — PRODUÇÃO', installer)
+        self.assertIn('VPN CORPORATIVA 1.1.1 — PRODUÇÃO', installer)
         self.assertEqual(installer.count('Version=1.0'), 2)
 
     def test_application_uses_release_version(self):
         app = (ROOT / "vpn_app/app.py").read_text(encoding="utf-8")
-        self.assertIn('APP_VERSION = "1.1.0"', app)
-        self.assertIn('Gtk.Window(title=f"VPN Corporativa {APP_VERSION}")', app)
+        self.assertIn('APP_VERSION = "1.1.1"', app)
+        self.assertIn('Gtk.Window(title="Painel VPN Corporativa - Centro de Controle da Rede")', app)
 
     def test_audit_uses_terminal_only_and_safe_user_fallback(self):
         audit = (ROOT / "auditar_vpn.sh").read_text(encoding="utf-8")
@@ -101,7 +101,7 @@ class Revision102Tests(unittest.TestCase):
 
     def test_primary_panel_uses_natural_height_and_expected_labels(self):
         app = (ROOT / "vpn_app/app.py").read_text(encoding="utf-8")
-        self.assertIn('Gtk.Label(label="Painel Principal")', app)
+        self.assertIn('Gtk.Label(label="Principal")', app)
         self.assertNotIn('Gtk.Label(label="Resumo")', app)
         self.assertIn("window.set_default_size(820, -1)", app)
         self.assertIn("notebook.set_current_page(0)", app)

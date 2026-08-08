@@ -1,6 +1,6 @@
-# VPN Corporativa 1.1.0 — Produção
+# VPN Corporativa 1.1.1 — Produção
 
-Esta é a release de segurança 1.1.0.
+Esta é a release visual e funcional 1.1.1.
 
 ## Compatibilidade e requisitos
 

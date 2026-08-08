@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1 — 2026-08-07
+
+- Aprimorado o ícone da bandeja com estados independentes das duas VPNs.
+- Reorganizado o menu com status, ações, abertura do painel e controle da janela.
+- Atualizados título, aba principal, foco e testes do tray.
+
 ## 1.1.0 — 2026-08-07
 
 - Protegida a credencial da VPN principal com GNOME Keyring/Secret Service.

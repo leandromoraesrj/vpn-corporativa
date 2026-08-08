@@ -1,4 +1,4 @@
-# VPN Corporativa 1.1.0
+# VPN Corporativa 1.1.1
 
 Aplicação Linux para conexão a uma VPN corporativa com split tunneling, painel GTK,
 configuração integrada e diagnóstico de rede.
@@ -99,7 +99,7 @@ criar snapshot persistente da senha.
 ~/.local/state/vpn/launcher.log
 ```
 
-A versão 1.1.0 não usa `/tmp` para logs permanentes e remove resíduos conhecidos
+A versão 1.1.1 não usa `/tmp` para logs permanentes e remove resíduos conhecidos
 de versões anteriores durante a instalação.
 
 ## Remoção
@@ -121,7 +121,7 @@ rotas, `/etc/hosts` ou a instalação ativa.
 
 ## Política de notificações
 
-A versão 1.1.0 exibe notificações do sistema somente em caso de erro real:
+A versão 1.1.1 exibe notificações do sistema somente em caso de erro real:
 
 - falha ao conectar;
 - falha definitiva após as tentativas de reconexão;
@@ -130,6 +130,13 @@ A versão 1.1.0 exibe notificações do sistema somente em caso de erro real:
 
 Conexões, reconexões, salvamentos e diagnósticos concluídos com sucesso são
 mostrados apenas no painel, no estado do ícone ou na aba correspondente.
+
+O ícone da bandeja é dividido entre a VPN principal e a VPN secundária: cada
+metade fica verde quando a VPN correspondente está
+conectada. O menu oferece **Conectar**/**Desconectar**,
+**Autenticar VPN secundária**/**Exibir F5** e **Abrir painel de vpn corporativa**.
+Esse último item executa novamente o teste de integridade antes de abrir e
+focar o painel.
 ## Diagnóstico final
 
 Eventos esperados e não problemáticos são classificados como `INFO`, sem
