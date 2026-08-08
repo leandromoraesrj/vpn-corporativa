@@ -20,12 +20,14 @@ readonly IFACE_FILE="$RUN_DIR/interface"
 readonly ROUTE_STATE="$RUN_DIR/route_state.txt"
 readonly SNAPSHOT_DIR="$RUN_DIR/config"
 readonly ROOT_CONF="$SNAPSHOT_DIR/connection.conf"
+readonly PROCESS_CONFIG="/proc/self/fd"
 readonly ROOT_ROUTES="$SNAPSHOT_DIR/routes.conf"
 readonly ROOT_HOSTS="$SNAPSHOT_DIR/hosts.conf"
 readonly HOSTS_FILE="/etc/hosts"
 readonly HOSTS_START="# INICIO MAPA VPN"
 readonly HOSTS_END="# FIM MAPA VPN"
 readonly VALIDATOR="/usr/local/libexec/vpn-privileged-validation.py"
+readonly OPENFORTIVPN_LAUNCHER="/usr/local/libexec/vpn-openfortivpn.py"
 readonly PROCESS_IDENTITY="/usr/local/libexec/vpn-process-identity"
 
 source "$PROCESS_IDENTITY"
@@ -192,7 +194,11 @@ ip route show default | awk '$5 !~ /^ppp/ {print; exit}' > "$ROUTE_STATE"
 mapfile -t PPP_BEFORE < <(ip -br link show | awk '$1 ~ /^ppp[0-9]+$/ {print $1}')
 
 readonly OPENFORTIVPN_EXE="$(readlink -f "$(command -v openfortivpn)")"
-"$OPENFORTIVPN_EXE" -c "$ROOT_CONF" &
+[[ -x "$OPENFORTIVPN_LAUNCHER" ]] || {
+    log_status "ERRO" "Launcher seguro do openfortivpn ausente."
+    exit 1
+}
+/usr/bin/python3 -I -E "$OPENFORTIVPN_LAUNCHER" --config "$ROOT_CONF" < <(cat) &
 VPN_PID=$!
 if ! VPN_STARTTIME="$(process_starttime "$VPN_PID")"; then
     kill -TERM "$VPN_PID" 2>/dev/null || true
@@ -200,9 +206,18 @@ if ! VPN_STARTTIME="$(process_starttime "$VPN_PID")"; then
     VPN_PID=""
     exit 1
 fi
+for _ in {1..50}; do
+    [[ "$(readlink -f "/proc/$VPN_PID/exe" 2>/dev/null)" == "$OPENFORTIVPN_EXE" ]] && break
+    started_process_is_same || exit 1
+    sleep 0.1
+done
+[[ "$(readlink -f "/proc/$VPN_PID/exe" 2>/dev/null)" == "$OPENFORTIVPN_EXE" ]] || {
+    log_status "ERRO" "Launcher do openfortivpn não concluiu o exec."
+    exit 1
+}
 IDENTITY_TEMP="$(mktemp "$RUN_DIR/.openfortivpn.process.XXXXXX")"
 rm -f -- "$IDENTITY_TEMP"
-write_process_identity "$VPN_PID" "$OPENFORTIVPN_EXE" "$ROOT_CONF" "$IDENTITY_TEMP"
+write_process_identity "$VPN_PID" "$OPENFORTIVPN_EXE" "$PROCESS_CONFIG" "$IDENTITY_TEMP"
 
 log_status "WAIT" "Aguardando interface PPP por até 60 segundos..."
 VPN_IFACE=""

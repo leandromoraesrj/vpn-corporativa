@@ -1,9 +1,16 @@
-# VPN Corporativa 1.0.1 — Correção pós-publicação
+# VPN Corporativa 1.1.0 — Segurança de credenciais
 
 Esta versão corrige a documentação de compatibilidade e a nomenclatura técnica
 da VPN principal, sem alterar funcionalidades.
 
-## Correções da versão 1.0.1
+## Alterações da versão 1.1.0
+
+- senha da VPN principal armazenada no GNOME Keyring via Secret Service;
+- configuração transitória do `openfortivpn` criada em `memfd` selado;
+- snapshots, argumentos, ambiente e logs sem a credencial;
+- migração legada e remoção opcional do segredo no uninstall.
+
+## Correções consolidadas da versão anterior
 
 - o painel identifica a VPN principal como **OpenFortiVPN**;
 - o ambiente oficialmente testado é Linux Mint, com Cinnamon em sessão X11;

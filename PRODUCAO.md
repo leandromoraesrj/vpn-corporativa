@@ -1,6 +1,6 @@
-# VPN Corporativa 1.0.1 — Produção
+# VPN Corporativa 1.1.0 — Produção
 
-Esta é a correção pós-publicação de produção 1.0.1.
+Esta é a release de segurança 1.1.0.
 
 ## Compatibilidade e requisitos
 
@@ -36,6 +36,8 @@ e podem não funcionar corretamente em Wayland.
 - aliases internos de `/etc/hosts` podem conter `_`;
 - o helper privilegiado revalida os arquivos de configuração;
 - senha da instalação inicial não é transmitida nos argumentos do processo;
+- senha da VPN principal armazenada no GNOME Keyring/Secret Service;
+- snapshots e arquivos de configuração não contêm a senha;
 - timeout de conexão usa `TERM` e `KILL` como último recurso;
 - logs e relatórios ficam em `~/.local/state/vpn`;
 - arquivos de configuração ficam em `~/.config/vpn`.

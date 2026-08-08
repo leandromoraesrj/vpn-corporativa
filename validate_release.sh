@@ -12,7 +12,7 @@ cleanup() {
 trap cleanup EXIT
 cleanup
 
-printf '== Validação VPN Corporativa 1.0.1 — Produção ==\n'
+printf '== Validação VPN Corporativa 1.1.0 — Produção ==\n'
 python3 - <<'PY'
 import ast
 from pathlib import Path
@@ -25,6 +25,7 @@ PY
 for script in install.sh uninstall.sh auditar_vpn.sh vpn-connect vpn-disconnect vpn-diagnose vpn-process-identity validate_release.sh; do
     bash -n "$script"
 done
+python3 -m py_compile vpn-openfortivpn.py
 printf 'Shell: sintaxe válida\n'
 python3 -m unittest discover -s tests -v
 printf 'Release validada com sucesso.\n'

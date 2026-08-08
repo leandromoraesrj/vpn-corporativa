@@ -1,6 +1,6 @@
 # Registro de validação
 
-## Versão 1.0.1 — 03/08/2026
+## Versão 1.1.0 — 07/08/2026
 
 ### Validação isolada
 

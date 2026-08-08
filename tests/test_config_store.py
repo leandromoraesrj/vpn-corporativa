@@ -35,6 +35,7 @@ class ConfigStoreTests(unittest.TestCase):
         })
         self.assertEqual(config_store.CONNECTION_FILE.stat().st_mode & 0o777, 0o600)
         self.assertIn("set-routes = 0", config_store.CONNECTION_FILE.read_text())
+        self.assertNotIn("password", config_store.CONNECTION_FILE.read_text())
 
     def test_connection_rejects_invalid_port_and_line_injection(self):
         base = {

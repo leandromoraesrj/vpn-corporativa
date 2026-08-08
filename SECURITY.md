@@ -10,7 +10,11 @@ impacto, versão afetada e passos mínimos para reprodução.
 Não inclua senhas, tokens, certificados privados nem o conteúdo de
 `~/.config/vpn/connection.conf` no relato.
 
+A senha da VPN principal deve permanecer no GNOME Keyring (Secret Service). O
+arquivo `connection.conf`, os snapshots em `/run/vpn` e os argumentos do
+`openfortivpn` não devem conter a credencial.
+
 ## Escopo
 
-A versão mantida atualmente é a `1.0.1`. Correções de segurança serão documentadas
+A versão mantida atualmente é a `1.1.0`. Correções de segurança serão documentadas
 nas notas da versão correspondente.

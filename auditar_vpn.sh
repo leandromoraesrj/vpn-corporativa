@@ -55,7 +55,8 @@ done
 
 for file in \
     "/usr/local/libexec/vpn-process-identity" \
-    "/usr/local/libexec/vpn-privileged-validation.py"
+    "/usr/local/libexec/vpn-privileged-validation.py" \
+    "/usr/local/libexec/vpn-openfortivpn.py"
 do
     audit_root_helper "$file" || true
 done
@@ -64,6 +65,12 @@ section "PERMISSÕES"
 stat -c '%A %U:%G %n' \
     "$HOME_DIR/.config/vpn" \
     "$HOME_DIR/.config/vpn/"*.conf 2>/dev/null || true
+
+if grep -Eq '^[[:space:]]*password[[:space:]]*=' "$HOME_DIR/.config/vpn/connection.conf" 2>/dev/null; then
+    echo "ERRO: connection.conf ainda contém uma senha; migrar para o Secret Service."
+else
+    echo "Credencial: não encontrada em connection.conf."
+fi
 
 if [[ $EUID -eq 0 ]]; then
     visudo -cf /etc/sudoers.d/vpn 2>&1

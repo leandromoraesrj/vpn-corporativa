@@ -30,6 +30,7 @@ class ConnectionTransactionTests(unittest.TestCase):
         self.lock = self.root / "control.lock"
         self.identity_library = self.root / "vpn-process-identity"
         self.validator = self.root / "validator.py"
+        self.launcher = self.root / "launcher"
 
         (self.config_dir / "connection.conf").write_text(
             "host = vpn.example\nport = 443\nusername = user\n"
@@ -118,6 +119,11 @@ verify_process_identity() {
             encoding="utf-8",
         )
         openfortivpn.chmod(0o755)
+        self.launcher.write_text(
+            "#!/usr/bin/env python3\nimport os\nos.execvp('openfortivpn', ['openfortivpn', '-c', '/proc/self/fd/9'])\n",
+            encoding="utf-8",
+        )
+        self.launcher.chmod(0o755)
         ip = self.bin_dir / "ip"
         ip.write_text(
             "#!/bin/bash\n"
@@ -151,6 +157,10 @@ verify_process_identity() {
                 f'readonly VALIDATOR="{self.validator}"',
             'readonly PROCESS_IDENTITY="/usr/local/libexec/vpn-process-identity"':
                 f'readonly PROCESS_IDENTITY="{self.identity_library}"',
+            'readonly OPENFORTIVPN_LAUNCHER="/usr/local/libexec/vpn-openfortivpn.py"':
+                f'readonly OPENFORTIVPN_LAUNCHER="{self.launcher}"',
+            'readonly OPENFORTIVPN_EXE="$(readlink -f "$(command -v openfortivpn)")"':
+                'readonly OPENFORTIVPN_EXE="/usr/bin/bash"',
         }
         for original, replacement in replacements.items():
             source = source.replace(original, replacement)

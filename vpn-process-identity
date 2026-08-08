@@ -68,6 +68,14 @@ verify_process_identity() {
     local argument_exe=""
     argument_exe="$(readlink -f "$(command -v "${arguments[0]}" 2>/dev/null)" 2>/dev/null)" || true
     [[ "${arguments[0]}" == "$executable" || "$argument_exe" == "$executable" ]] || return 1
-    [[ "${arguments[1]}" == "-c" && "${arguments[2]}" == "$config" ]] || return 1
+    [[ "${arguments[1]}" == "-c" ]] || return 1
+    if [[ "$config" == "/proc/self/fd" ]]; then
+        [[ "${arguments[2]}" =~ ^/proc/self/fd/[0-9]+$ ]] || return 1
+        local process_fd="/proc/$pid/fd/${arguments[2]##*/}"
+        [[ -r "$process_fd" ]] || return 1
+        [[ "$(readlink "$process_fd" 2>/dev/null)" == /memfd:vpn-openfortivpn-config* ]] || return 1
+    else
+        [[ "${arguments[2]}" == "$config" ]] || return 1
+    fi
     printf '%s\n' "$pid"
 }

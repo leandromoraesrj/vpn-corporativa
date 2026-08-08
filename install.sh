@@ -29,7 +29,7 @@ DESKTOP_DIR="$(sudo -u "$TARGET_USER" xdg-user-dir DESKTOP 2>/dev/null || true)"
 
 clear
 echo "============================================================"
-echo "VPN CORPORATIVA 1.0.1 — PRODUÇÃO"
+echo "VPN CORPORATIVA 1.1.0 — PRODUÇÃO"
 echo "============================================================"
 echo
 echo "Este instalador:"
@@ -69,6 +69,11 @@ python3 - <<'PY' >/dev/null 2>&1 || MISSING+=("gir1.2-ayatanaappindicator3-0.1")
 import gi
 gi.require_version("AyatanaAppIndicator3", "0.1")
 from gi.repository import AyatanaAppIndicator3
+PY
+python3 - <<'PY' >/dev/null 2>&1 || MISSING+=("python3-gi" "gir1.2-secret-1")
+import gi
+gi.require_version("Secret", "1")
+from gi.repository import Secret
 PY
 
 mapfile -t MISSING < <(printf '%s\n' "${MISSING[@]}" | awk 'NF && !seen[$0]++')
@@ -115,6 +120,7 @@ install -m 755 "$SCRIPT_DIR/vpn-connect" /usr/local/libexec/vpn-connect
 install -m 755 "$SCRIPT_DIR/vpn-disconnect" /usr/local/libexec/vpn-disconnect
 install -m 755 "$SCRIPT_DIR/vpn-diagnose" /usr/local/libexec/vpn-diagnose
 install -m 755 "$SCRIPT_DIR/vpn-process-identity" /usr/local/libexec/vpn-process-identity
+install -m 755 "$SCRIPT_DIR/vpn-openfortivpn.py" /usr/local/libexec/vpn-openfortivpn.py
 install -m 755 "$SCRIPT_DIR/vpn_app/privileged_validation.py" \
     /usr/local/libexec/vpn-privileged-validation.py
 install -m 644 "$SCRIPT_DIR/vpn.svg" /usr/local/share/icons/vpn.svg
@@ -131,13 +137,11 @@ if [[ ! -f "$CONFIG_DIR/connection.conf" ]]; then
     read -r -p "Porta [443]: " PORT
     PORT="${PORT:-443}"
     read -r -p "Usuário VPN: " VPN_USER
-    read -r -s -p "Senha VPN: " VPN_PASSWORD
-    echo
     read -r -p "Fingerprint confiável: " CERT
 
     if ! VALIDATED=$(
-        printf '%s\0%s\0%s\0%s\0%s\0' \
-            "$HOST" "$PORT" "$VPN_USER" "$VPN_PASSWORD" "$CERT" |
+        printf '%s\0%s\0%s\0%s\0' \
+            "$HOST" "$PORT" "$VPN_USER" "$CERT" |
         sudo -u "$TARGET_USER" env HOME="$TARGET_HOME" \
             PYTHONPATH="$APP_DIR" python3 -c '
 import sys
@@ -146,20 +150,19 @@ from vpn_app.config_store import validate_connection
 fields = sys.stdin.buffer.read().split(b"\\0")
 if fields and fields[-1] == b"":
     fields.pop()
-if len(fields) != 5:
+if len(fields) != 4:
     raise SystemExit("Quantidade inválida de campos.")
 
-host, port, username, password, trusted_cert = (
+host, port, username, trusted_cert = (
     field.decode("utf-8") for field in fields
 )
 values = validate_connection({
     "host": host,
     "port": port,
     "username": username,
-    "password": password,
     "trusted-cert": trusted_cert,
 })
-for key in ("host", "port", "username", "password", "trusted-cert"):
+for key in ("host", "port", "username", "trusted-cert"):
     print(values[key])
 '
     ); then
@@ -170,15 +173,13 @@ for key in ("host", "port", "username", "password", "trusted-cert"):
     HOST="${VALIDATED_FIELDS[0]}"
     PORT="${VALIDATED_FIELDS[1]}"
     VPN_USER="${VALIDATED_FIELDS[2]}"
-    VPN_PASSWORD="${VALIDATED_FIELDS[3]}"
-    CERT="${VALIDATED_FIELDS[4]}"
+    CERT="${VALIDATED_FIELDS[3]}"
 
     umask 077
     cat > "$CONFIG_DIR/connection.conf" <<EOF
 host = $HOST
 port = $PORT
 username = $VPN_USER
-password = $VPN_PASSWORD
 set-routes = 0
 set-dns = 0
 trusted-cert = $CERT
@@ -256,13 +257,14 @@ fi
 python3 -m py_compile "$APP_DIR/vpn.py" "$APP_DIR"/vpn_app/*.py
 
 echo
-echo "VPN Corporativa 1.0.1 instalada com sucesso."
+echo "VPN Corporativa 1.1.0 instalada com sucesso."
 echo "A auditoria específica está em:"
 echo "  $APP_DIR/auditar_vpn.sh"
 echo
-read -r -p "Iniciar o ícone agora? [S/n]: " START
+read -r -p "Iniciar o ícone agora? [S/n]: " START || START="n"
 if [[ ! "$START" =~ ^[Nn]$ ]]; then
     sudo -u "$TARGET_USER" env HOME="$TARGET_HOME" DISPLAY="${DISPLAY:-:0}" \
         XAUTHORITY="$TARGET_HOME/.Xauthority" \
-        nohup "$APP_DIR/vpn.py" >"$STATE_DIR/launcher.log" 2>&1 &
+        nohup /bin/sh -c 'exec "$1" >"$2" 2>&1' sh \
+        "$APP_DIR/vpn.py" "$STATE_DIR/launcher.log" >/dev/null 2>&1 &
 fi

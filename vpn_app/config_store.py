@@ -36,6 +36,12 @@ def read_key_values() -> dict[str, str]:
     return values
 
 
+def read_connection_without_password() -> dict[str, str]:
+    values = read_key_values()
+    values.pop("password", None)
+    return values
+
+
 def atomic_write(path: Path, content: str, mode: int = 0o600) -> None:
     ensure_config_dir()
     temp = path.with_suffix(path.suffix + ".tmp")
@@ -113,7 +119,6 @@ def save_connection(values: dict[str, str]) -> None:
         f"host = {normalized['host']}\n"
         f"port = {normalized['port']}\n"
         f"username = {normalized['username']}\n"
-        f"password = {normalized['password']}\n"
         "set-routes = 0\n"
         "set-dns = 0\n"
         f"trusted-cert = {normalized['trusted-cert']}\n"

@@ -15,7 +15,6 @@ REQUIRED_CONNECTION_KEYS = {
     "host",
     "port",
     "username",
-    "password",
     "trusted-cert",
     *ALLOWED_FIXED_DIRECTIVES,
 }
@@ -30,7 +29,7 @@ def validate_connection(values: dict[str, str]) -> dict[str, str]:
         raise ValueError("A porta deve ser um número entre 1 e 65535.")
 
     normalized: dict[str, str] = {"port": str(port)}
-    required = ("host", "username", "password", "trusted-cert")
+    required = ("host", "username", "trusted-cert")
     for key in required:
         value = str(values.get(key, ""))
         if not value.strip():
@@ -39,7 +38,12 @@ def validate_connection(values: dict[str, str]) -> dict[str, str]:
             raise ValueError(f"O campo {key} contém uma quebra de linha inválida.")
         if "\0" in value:
             raise ValueError(f"O campo {key} contém um caractere de controle inválido.")
-        normalized[key] = value if key == "password" else value.strip()
+        normalized[key] = value.strip()
+    if "password" in values:
+        password = str(values["password"])
+        if not password.strip() or any(char in password for char in ("\n", "\r", "\0")):
+            raise ValueError("Campo obrigatório vazio: password")
+        normalized["password"] = password
     return normalized
 
 
@@ -96,16 +100,10 @@ def parse_connection_text(content: str) -> dict[str, str]:
         if key in values:
             raise ValueError(f"Diretiva duplicada em connection.conf: {key}")
 
-        # O escritor usa exatamente um espaço de formatação depois de "=".
-        # Remova somente esse separador para a senha, preservando quaisquer
-        # espaços adicionais que façam parte da credencial.
-        if key == "password":
-            value = value_text[1:] if value_text.startswith(" ") else value_text
-        else:
-            value = value_text.strip()
+        value = value_text[1:] if key == "password" and value_text.startswith(" ") else value_text.strip()
         values[key] = value
 
-    unknown = set(values) - REQUIRED_CONNECTION_KEYS
+    unknown = set(values) - REQUIRED_CONNECTION_KEYS - {"password"}
     if unknown:
         raise ValueError(
             "Diretivas não permitidas em connection.conf: "
@@ -186,7 +184,6 @@ def _connection_content(values: dict[str, str]) -> str:
         f"host = {values['host']}\n"
         f"port = {values['port']}\n"
         f"username = {values['username']}\n"
-        f"password = {values['password']}\n"
         "set-routes = 0\n"
         "set-dns = 0\n"
         f"trusted-cert = {values['trusted-cert']}\n"

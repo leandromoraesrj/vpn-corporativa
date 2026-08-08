@@ -30,6 +30,28 @@ class Revision103Tests(unittest.TestCase):
         )
         self.assertIn("sys.stdin.buffer.read()", installer)
 
+    def test_credential_flow_security_contract(self):
+        app = (ROOT / "vpn_app/app.py").read_text(encoding="utf-8")
+        launcher = (ROOT / "vpn-openfortivpn.py").read_text(encoding="utf-8")
+        connect = (ROOT / "vpn-connect").read_text(encoding="utf-8")
+        uninstall = (ROOT / "uninstall.sh").read_text(encoding="utf-8")
+
+        self.assertLess(
+            app.index("secret_store.store(username, legacy_password)"),
+            app.index("config_store.save_connection(values)", app.index("legacy_password")),
+        )
+        self.assertIn("finally:", app[app.index("def _start_connect_helper"):])
+        self.assertIn("process.stdin.close()", app)
+        self.assertIn("MFD_ALLOW_SEALING", launcher)
+        self.assertIn("F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL", launcher)
+        self.assertNotIn("except OSError:\n                pass", launcher)
+        self.assertIn("/usr/bin/python3 -I -E", connect)
+        self.assertIn("clear_keyring_credential", uninstall)
+        self.assertIn("Remover a credencial do GNOME Keyring?", uninstall)
+        identity = (ROOT / "vpn-process-identity").read_text(encoding="utf-8")
+        self.assertIn('/proc/$pid/fd/${arguments[2]##*/}', identity)
+        self.assertIn("/memfd:vpn-openfortivpn-config*", identity)
+
     def _write_valid_configuration(self, root: Path) -> tuple[Path, Path, Path]:
         connection = root / "connection.conf"
         routes = root / "routes.conf"
@@ -159,6 +181,7 @@ class Revision103Tests(unittest.TestCase):
             self.assertEqual(output.stat().st_mode & 0o777, 0o700)
             for snapshot in output.iterdir():
                 self.assertEqual(snapshot.stat().st_mode & 0o777, 0o600)
+                self.assertNotIn("password", snapshot.read_text(encoding="utf-8"))
             self.assertEqual(
                 validate_routes(output / "routes.conf"),
                 ["198.51.100.0/24"],

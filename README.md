@@ -1,4 +1,4 @@
-# VPN Corporativa 1.0.1
+# VPN Corporativa 1.1.0
 
 Aplicação Linux para conexão a uma VPN corporativa com split tunneling, painel GTK,
 configuração integrada e diagnóstico de rede.
@@ -85,6 +85,12 @@ autorizados do ambiente. A configuração existente é preservada em atualizaç�
 A URL de autenticação web da VPN secundária pode ser informada na aba
 **Configuração**, sem ser incorporada ao código ou aos logs.
 
+A senha da VPN principal é armazenada no GNOME Keyring pelo Secret Service.
+`connection.conf` contém somente os parâmetros não secretos. Durante a conexão,
+a aplicação envia a credencial ao helper root por um canal transitório; o
+helper monta a configuração do `openfortivpn` em memória (`memfd_create`), sem
+criar snapshot persistente da senha.
+
 ## Arquivos de estado
 
 ```text
@@ -93,7 +99,7 @@ A URL de autenticação web da VPN secundária pode ser informada na aba
 ~/.local/state/vpn/launcher.log
 ```
 
-A versão 1.0.1 não usa `/tmp` para logs permanentes e remove resíduos conhecidos
+A versão 1.1.0 não usa `/tmp` para logs permanentes e remove resíduos conhecidos
 de versões anteriores durante a instalação.
 
 ## Remoção
@@ -115,7 +121,7 @@ rotas, `/etc/hosts` ou a instalação ativa.
 
 ## Política de notificações
 
-A versão 1.0.1 exibe notificações do sistema somente em caso de erro real:
+A versão 1.1.0 exibe notificações do sistema somente em caso de erro real:
 
 - falha ao conectar;
 - falha definitiva após as tentativas de reconexão;

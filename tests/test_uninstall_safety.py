@@ -67,6 +67,7 @@ class UninstallSafetyTests(unittest.TestCase):
             "/usr/local/libexec/vpn-diagnose": str(self.critical["diagnose"]),
             "/usr/local/libexec/vpn-process-identity": str(self.libexec / "vpn-process-identity"),
             "/usr/local/libexec/vpn-privileged-validation.py": str(self.libexec / "validator.py"),
+            "/usr/local/libexec/vpn-openfortivpn.py": str(self.libexec / "vpn-openfortivpn.py"),
             "/usr/local/share/icons": str(self.icons),
             "/etc/sudoers.d/vpn": str(self.sudoers),
         }
@@ -82,7 +83,7 @@ class UninstallSafetyTests(unittest.TestCase):
 
     def _run(self) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["bash", str(self.script)], input="S\n", text=True,
+            ["bash", str(self.script)], input="S\nN\n", text=True,
             capture_output=True, env={**self.environment, "SUDO_USER": "tester"},
             timeout=5, check=False,
         )

@@ -17,7 +17,7 @@ class Revision102Tests(unittest.TestCase):
         app = (ROOT / "vpn_app/app.py").read_text(encoding="utf-8")
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertNotIn('/tmp/vpn_', app)
-        self.assertIn('>"$STATE_DIR/launcher.log"', installer)
+        self.assertIn('"$APP_DIR/vpn.py" "$STATE_DIR/launcher.log"', installer)
         self.assertIn('.local/state/vpn', installer)
 
     def test_connect_timeout_stops_subprocess(self):
@@ -35,12 +35,12 @@ class Revision102Tests(unittest.TestCase):
         self.assertIn('TARGET_GROUP="$(id -gn "$TARGET_USER")"', installer)
         self.assertNotIn('-g "$TARGET_USER"', installer)
         self.assertIn('Name=VPN Corporativa', installer)
-        self.assertIn('VPN CORPORATIVA 1.0.1 — PRODUÇÃO', installer)
+        self.assertIn('VPN CORPORATIVA 1.1.0 — PRODUÇÃO', installer)
         self.assertEqual(installer.count('Version=1.0'), 2)
 
     def test_application_uses_release_version(self):
         app = (ROOT / "vpn_app/app.py").read_text(encoding="utf-8")
-        self.assertIn('APP_VERSION = "1.0.1"', app)
+        self.assertIn('APP_VERSION = "1.1.0"', app)
         self.assertIn('Gtk.Window(title=f"VPN Corporativa {APP_VERSION}")', app)
 
     def test_audit_uses_terminal_only_and_safe_user_fallback(self):

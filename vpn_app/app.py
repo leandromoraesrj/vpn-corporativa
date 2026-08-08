@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -16,17 +17,17 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
 from gi.repository import AyatanaAppIndicator3, Gdk, GLib, Gtk
 
-from . import config_store, f5_backend, network
+from . import config_store, f5_backend, network, secret_store
 
 LOGGER = logging.getLogger(__name__)
 
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.1.0"
 APP_NAME = "VPN Corporativa"
 APP_ID = "br.local.vpncorporativa"
 CONNECT_HELPER = "/usr/local/libexec/vpn-connect"
 DISCONNECT_HELPER = "/usr/local/libexec/vpn-disconnect"
 DIAGNOSE_HELPER = "/usr/local/libexec/vpn-diagnose"
-LOCK_NAME = "\0vpn_corporativa_1_0_lock"
+LOCK_NAME = "\0vpn_corporativa_1_1_lock"
 STATE_DIR = Path.home() / ".local" / "state" / "vpn"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 LOG_PATH = STATE_DIR / "connection.log"
@@ -659,6 +660,14 @@ class VPNApplication:
 
     def _load_config_into_ui(self) -> None:
         values = config_store.read_key_values()
+        legacy_password = values.pop("password", None)
+        if legacy_password:
+            try:
+                username = values.get("username", "")
+                secret_store.store(username, legacy_password)
+                config_store.save_connection(values)
+            except (OSError, RuntimeError, ValueError):
+                LOGGER.warning("Migração da credencial para o Secret Service não foi concluída.")
         for key, entry in self.config_entries.items():
             entry.set_text(values.get(key, ""))
 
@@ -672,11 +681,55 @@ class VPNApplication:
     def save_connection(self) -> None:
         values = {key: entry.get_text() for key, entry in self.config_entries.items()}
         try:
+            password = values.pop("password", "")
+            if password:
+                secret_store.store(values.get("username", ""), password)
+            elif not secret_store.lookup(values.get("username", "")):
+                raise ValueError("Informe a senha da VPN para armazená-la no Secret Service.")
             config_store.save_connection(values)
+        except RuntimeError:
+            self._show_message(
+                "Não foi possível salvar a conexão",
+                "Não foi possível acessar o GNOME Keyring.",
+                error=True,
+            )
+            return
         except (KeyError, OSError, ValueError) as exc:
             self._show_message("Não foi possível salvar a conexão", str(exc), error=True)
             return
         self._show_message("Configuração salva", "Os dados da conexão foram atualizados.")
+
+    @staticmethod
+    def _credential_frame() -> bytes:
+        values = config_store.read_key_values()
+        username = values.get("username", "")
+        password = secret_store.lookup(username)
+        if not password:
+            raise RuntimeError("A senha da VPN não está disponível no Secret Service.")
+        encoded = password.encode("utf-8")
+        if len(encoded) > 4096:
+            raise RuntimeError("A credencial da VPN é inválida.")
+        return struct.pack("!I", len(encoded)) + encoded
+
+    @classmethod
+    def _start_connect_helper(cls, stdout=None) -> subprocess.Popen:
+        process = subprocess.Popen(
+            ["sudo", "-n", CONNECT_HELPER],
+            stdin=subprocess.PIPE,
+            stdout=stdout,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            frame = cls._credential_frame()
+            assert process.stdin is not None
+            process.stdin.write(frame)
+        except Exception:
+            process.terminate()
+            raise
+        finally:
+            if process.stdin is not None and not process.stdin.closed:
+                process.stdin.close()
+        return process
 
     def _buffer_text(self, view: Gtk.TextView) -> str:
         buffer = view.get_buffer()
@@ -798,11 +851,12 @@ class VPNApplication:
 
         def worker():
             with LOG_PATH.open("w", encoding="utf-8") as log:
-                process = subprocess.Popen(
-                    ["sudo", "-n", CONNECT_HELPER],
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                )
+                try:
+                    process = self._start_connect_helper(log)
+                except (OSError, RuntimeError, ValueError):
+                    LOGGER.warning("Não foi possível preparar a credencial.")
+                    GLib.idle_add(self._connection_failed, 1)
+                    return
 
                 connected = False
                 # O helper aguarda a PPP por até 60 s; damos margem para
@@ -914,11 +968,11 @@ class VPNApplication:
                     )
                     log.flush()
                     os.fsync(log.fileno())
-                    process = subprocess.Popen(
-                        ["sudo", "-n", CONNECT_HELPER],
-                        stdout=log,
-                        stderr=subprocess.STDOUT,
-                    )
+                    try:
+                        process = self._start_connect_helper(log)
+                    except (OSError, RuntimeError, ValueError):
+                        LOGGER.warning("Não foi possível preparar a credencial.")
+                        continue
 
                     for _ in range(140):
                         if not self.desired_connected or self.manual_disconnect:

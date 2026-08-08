@@ -57,6 +57,25 @@ run_state_is_present() {
     find "$RUN_DIR" -mindepth 1 -print -quit 2>/dev/null | grep -q .
 }
 
+clear_keyring_credential() {
+    local connection_file="$TARGET_HOME/.config/vpn/connection.conf"
+    local username=""
+    if [[ -f "$connection_file" ]]; then
+        username="$(awk -F= '$1 ~ /^[[:space:]]*username[[:space:]]*$/ {value=$2; sub(/^[[:space:]]+/, "", value); sub(/[[:space:]]+$/, "", value); print value; exit}' "$connection_file")"
+    fi
+    [[ -n "$username" ]] || return 0
+    sudo -u "$TARGET_USER" env \
+        HOME="$TARGET_HOME" \
+        PYTHONPATH="$APP_DIR" \
+        DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-}" \
+        XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u "$TARGET_USER")}" \
+        /usr/bin/python3 -c '
+import sys
+from vpn_app import secret_store
+raise SystemExit(0 if secret_store.clear(sys.argv[1]) else 1)
+' "$username"
+}
+
 verify_safe_without_disconnect_helper() {
     if managed_process_is_active; then
         echo "Helper de desconexão ausente e processo openfortivpn gerenciado ativo; desinstalação abortada." >&2
@@ -91,6 +110,14 @@ else
 fi
 
 read -r -p "Preservar configurações? [S/n]: " KEEP
+read -r -p "Remover a credencial do GNOME Keyring? [s/N]: " CLEAR_KEYRING || CLEAR_KEYRING=""
+
+if [[ "$CLEAR_KEYRING" =~ ^[Ss]$ ]]; then
+    clear_keyring_credential || {
+        echo "Não foi possível remover a credencial do GNOME Keyring; desinstalação abortada." >&2
+        exit 1
+    }
+fi
 
 rm -rf "$APP_DIR"
 rm -f /usr/local/libexec/vpn-connect
@@ -98,6 +125,7 @@ rm -f /usr/local/libexec/vpn-disconnect
 rm -f /usr/local/libexec/vpn-diagnose
 rm -f /usr/local/libexec/vpn-process-identity
 rm -f /usr/local/libexec/vpn-privileged-validation.py
+rm -f /usr/local/libexec/vpn-openfortivpn.py
 rm -f /usr/local/share/icons/vpn.svg
 rm -f /usr/local/share/icons/vpn-corporativa-{gray,yellow,green,red}.svg
 rm -f /etc/sudoers.d/vpn

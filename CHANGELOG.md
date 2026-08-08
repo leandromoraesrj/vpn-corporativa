@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0 — 2026-08-07
+
+- Protegida a credencial da VPN principal com GNOME Keyring/Secret Service.
+- Configuração do `openfortivpn` criada em `memfd` selado, sem senha em arquivos,
+  snapshots, argumentos, ambiente ou logs.
+- Migração legada, reconexão automática, auditoria, uninstall e testes de
+  segurança atualizados.
+
 ## 1.0.1 — 2026-08-03
 
 - Corrigida a nomenclatura visível da VPN principal para OpenFortiVPN.
