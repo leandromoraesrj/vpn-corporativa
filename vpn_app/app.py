@@ -21,7 +21,7 @@ from . import config_store, f5_backend, network, secret_store
 
 LOGGER = logging.getLogger(__name__)
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 APP_NAME = "VPN Corporativa"
 APP_ID = "br.local.vpncorporativa"
 CONNECT_HELPER = "/usr/local/libexec/vpn-connect"
@@ -34,9 +34,7 @@ LOG_PATH = STATE_DIR / "connection.log"
 DIAG_PATH = STATE_DIR / "diagnostic-latest.txt"
 
 ICON_OFF = "/usr/local/share/icons/vpn-corporativa-gray.svg"
-ICON_WAIT = "/usr/local/share/icons/vpn-corporativa-yellow.svg"
 ICON_ON = "/usr/local/share/icons/vpn-corporativa-green.svg"
-ICON_ERROR = "/usr/local/share/icons/vpn-corporativa-red.svg"
 ICON_PRIMARY = "/usr/local/share/icons/vpn-corporativa-primary.svg"
 ICON_SECONDARY = "/usr/local/share/icons/vpn-corporativa-secondary.svg"
 ICON_COLORS = {
@@ -83,6 +81,8 @@ class VPNApplication:
         self.disconnect_button: Gtk.Button | None = None
         self.f5_auth_buttons: list[Gtk.Button] = []
         self.f5_window_buttons: list[Gtk.Button] = []
+        self.f5_hide_button: Gtk.Button | None = None
+        self.f5_show_button: Gtk.Button | None = None
         self.menu_primary_status: Gtk.MenuItem | None = None
         self.menu_secondary_status: Gtk.MenuItem | None = None
         self.menu_primary_action: Gtk.MenuItem | None = None
@@ -156,14 +156,8 @@ class VPNApplication:
 '''
 
     def _split_icon_path(self, primary_state: str, secondary_state: str) -> str:
-        if primary_state == "on" and secondary_state == "on":
-            return ICON_ON
-        if primary_state == "on" and secondary_state == "off":
-            return ICON_PRIMARY
-        if primary_state == "off" and secondary_state == "on":
-            return ICON_SECONDARY
-        if primary_state == "off" and secondary_state == "off":
-            return ICON_OFF
+        if primary_state in {"on", "off"} and secondary_state in {"on", "off"}:
+            return self._connected_icon(primary_state == "on", secondary_state == "on")
 
         path = STATE_DIR / f"tray-icon-{primary_state}-{secondary_state}.svg"
         if not path.exists():
@@ -214,12 +208,20 @@ class VPNApplication:
 
     def _activate_secondary_menu(self, _item=None) -> None:
         current = f5_backend.status()
-        if current.connected and f5_backend.window_visible():
-            self.hide_f5()
-        elif current.connected:
-            self.show_f5()
-        else:
+        if not current.connected:
             self.open_f5()
+            return
+
+        action_label = (
+            self.menu_secondary_action.get_label()
+            if self.menu_secondary_action is not None
+            else ""
+        )
+        if action_label == "Ocultar F5":
+            self.hide_f5()
+            self._refresh_controls()
+        else:
+            self.show_f5()
 
     def _build_indicator(self):
         icon = self._tray_icon()
@@ -234,27 +236,27 @@ class VPNApplication:
 
         menu = Gtk.Menu()
 
-        open_item = Gtk.MenuItem(label="Abrir painel de vpn corporativa")
+        open_item = Gtk.MenuItem(label="Abrir Painel de VPN Corporativa")
         open_item.connect("activate", lambda *_: self._open_panel_from_tray())
         menu.append(open_item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
-        self.menu_primary_status = Gtk.MenuItem(label="Principal: verificando...")
+        self.menu_primary_status = Gtk.MenuItem(label="VPN Principal: Verificando...")
         self.menu_primary_status.set_sensitive(False)
         menu.append(self.menu_primary_status)
 
-        self.menu_secondary_status = Gtk.MenuItem(label="Secundária: verificando...")
+        self.menu_secondary_status = Gtk.MenuItem(label="VPN Secundária: Verificando...")
         self.menu_secondary_status.set_sensitive(False)
         menu.append(self.menu_secondary_status)
 
         menu.append(Gtk.SeparatorMenuItem())
 
-        self.menu_primary_action = Gtk.MenuItem(label="Conectar VPN principal")
+        self.menu_primary_action = Gtk.MenuItem(label="Conectar VPN Principal")
         self.menu_primary_action.connect("activate", self._activate_primary_menu)
         menu.append(self.menu_primary_action)
 
-        self.menu_secondary_action = Gtk.MenuItem(label="Autenticar VPN secundária")
+        self.menu_secondary_action = Gtk.MenuItem(label="Autenticar VPN Secundária")
         self.menu_secondary_action.connect("activate", self._activate_secondary_menu)
         menu.append(self.menu_secondary_action)
 
@@ -278,14 +280,14 @@ class VPNApplication:
         self.indicator.set_icon_full(icon, title)
         self.indicator.set_title(title)
         if self.menu_primary_status is not None:
-            self.menu_primary_status.set_label(f"Principal: {self._primary_status_text()}")
+            self.menu_primary_status.set_label(f"VPN Principal: {self._primary_status_text()}")
         if self.menu_secondary_status is not None:
-            self.menu_secondary_status.set_label(f"Secundária: {self._secondary_status_text()}")
+            self.menu_secondary_status.set_label(f"VPN Secundária: {self._secondary_status_text()}")
         if self.menu_primary_action is not None:
             self.menu_primary_action.set_label(
-                "Desconectar VPN principal"
+                "Desconectar VPN Principal"
                 if self.can_disconnect()
-                else "Conectar VPN principal"
+                else "Conectar VPN Principal"
             )
         if self.menu_secondary_action is not None:
             self.menu_secondary_action.set_label(
@@ -295,7 +297,7 @@ class VPNApplication:
                     else "Exibir F5"
                 )
                 if f5.connected
-                else "Autenticar VPN secundária"
+                else "Autenticar VPN Secundária"
             )
 
         if self.connect_button is not None:
@@ -304,8 +306,12 @@ class VPNApplication:
             self.disconnect_button.set_sensitive(self.is_connecting or connected)
         for button in self.f5_auth_buttons:
             button.set_sensitive(f5_backend.authentication_enabled(f5))
-        for button in self.f5_window_buttons:
-            button.set_sensitive(f5_backend.window_controls_enabled(f5))
+        window_available = f5_backend.window_controls_enabled(f5)
+        window_visible = f5_backend.window_visible() if window_available else False
+        if self.f5_hide_button is not None:
+            self.f5_hide_button.set_sensitive(window_available and window_visible)
+        if self.f5_show_button is not None:
+            self.f5_show_button.set_sensitive(window_available and not window_visible)
 
     def _safe(self, callback):
         def wrapper(*_args):
@@ -592,12 +598,14 @@ class VPNApplication:
         hide_f5.connect("clicked", lambda *_: self.hide_f5())
         secondary_buttons.pack_start(hide_f5, True, True, 0)
         self.f5_window_buttons.append(hide_f5)
+        self.f5_hide_button = hide_f5
 
         show_f5 = Gtk.Button(label="Exibir F5")
         show_f5.set_size_request(summary_button_width, -1)
         show_f5.connect("clicked", lambda *_: self.show_f5())
         secondary_buttons.pack_start(show_f5, True, True, 0)
         self.f5_window_buttons.append(show_f5)
+        self.f5_show_button = show_f5
         secondary_box.pack_start(secondary_buttons, False, False, 0)
         secondary_frame.set_size_request(summary_card_width, -1)
         vpn_row.pack_start(secondary_frame, False, False, 0)
@@ -1152,6 +1160,9 @@ class VPNApplication:
         ok, message = f5_backend.hide_window()
         if notify and not ok:
             self._notify(message)
+        self._refresh_controls()
+        if ok:
+            GLib.timeout_add(150, self._refresh_controls)
         return ok
 
     def show_f5(self) -> None:
@@ -1159,6 +1170,8 @@ class VPNApplication:
         if not ok:
             self._notify(message)
         self._refresh_controls()
+        if ok:
+            GLib.timeout_add(150, self._refresh_controls)
 
     def _watch_f5(self) -> None:
         current = f5_backend.status()

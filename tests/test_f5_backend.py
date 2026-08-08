@@ -126,19 +126,39 @@ class F5BackendTests(unittest.TestCase):
             ["xdotool", "windowminimize", "0x03000019"],
         )
 
+    @mock.patch("vpn_app.f5_backend._run")
+    def test_window_visible_uses_ewmh_hidden_state(self, run):
+        run.side_effect = [
+            "0x03000019 0 f5vpn.F5 VPN host F5 VPN",
+            '_NET_WM_STATE(ATOM) = _NET_WM_STATE_SKIP_TASKBAR',
+        ]
+        self.assertTrue(f5_backend.window_visible())
+        self.assertEqual(run.call_args_list[1].args[0], ["xprop", "-id", "0x03000019", "_NET_WM_STATE"])
+
+        run.reset_mock()
+        run.side_effect = [
+            "0x03000019 0 f5vpn.F5 VPN host F5 VPN",
+            '_NET_WM_STATE(ATOM) = _NET_WM_STATE_SKIP_TASKBAR, _NET_WM_STATE_HIDDEN',
+        ]
+        self.assertFalse(f5_backend.window_visible())
+
     @mock.patch("vpn_app.f5_backend.window_id", return_value="0x03000019")
     @mock.patch("vpn_app.f5_backend.subprocess.run")
     def test_show_restores_taskbar_and_activates_window(self, run, _window):
         run.return_value = mock.Mock(returncode=0, stderr="")
         ok, _message = f5_backend.show_window()
         self.assertTrue(ok)
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_count, 3)
         self.assertEqual(
             run.call_args_list[0].args[0],
             ["wmctrl", "-i", "-r", "0x03000019", "-b", "remove,skip_taskbar"],
         )
         self.assertEqual(
             run.call_args_list[1].args[0],
+            ["wmctrl", "-i", "-r", "0x03000019", "-b", "remove,hidden"],
+        )
+        self.assertEqual(
+            run.call_args_list[2].args[0],
             ["wmctrl", "-i", "-a", "0x03000019"],
         )
 

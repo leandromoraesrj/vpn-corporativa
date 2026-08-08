@@ -1,9 +1,19 @@
-# VPN Corporativa 1.1.1 — Ícone e menu
+# VPN Corporativa 1.1.2 — Correções da bandeja e janela F5
 
-Esta versão corrige a documentação de compatibilidade e a nomenclatura técnica
-da VPN principal, sem alterar funcionalidades.
+Esta versão corrige a sincronização da bandeja e dos controles da janela F5,
+preservando os fluxos de conexão, desconexão e reconexão automática.
 
-## Alterações da versão 1.1.1
+## Alterações da versão 1.1.2
+
+- detecção da visibilidade da janela F5 pelo estado real do gerenciador de
+  janelas;
+- remoção explícita do estado minimizado ao exibir a janela;
+- botões **Ocultar F5** e **Exibir F5** alternados conforme o estado real;
+- status do menu identificados como **VPN Principal** e **VPN Secundária**;
+- correção da limpeza dos ícones divididos no uninstall;
+- manifesto e documentação sincronizados com o pacote publicado.
+
+## Alterações consolidadas da versão 1.1.1
 
 - senha da VPN principal armazenada no GNOME Keyring via Secret Service;
 - configuração transitória do `openfortivpn` criada em `memfd` selado;

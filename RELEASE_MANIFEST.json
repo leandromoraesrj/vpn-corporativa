@@ -1,11 +1,11 @@
 {
   "product": "VPN Corporativa",
-  "version": "1.1.1",
-  "display_version": "1.1.1",
+  "version": "1.1.2",
+  "display_version": "1.1.2",
   "channel": "production",
   "release_artifacts": {
-    "archive": "vpn-corporativa-v1.1.1.zip",
-    "checksum": "vpn-corporativa-v1.1.1.zip.sha256",
+    "archive": "vpn-corporativa-v1.1.2.zip",
+    "checksum": "vpn-corporativa-v1.1.2.zip.sha256",
     "stored_in_repository": false
   },
   "files": [
@@ -33,6 +33,7 @@
     "tests/test_revision_104.py",
     "tests/test_revision_105.py",
     "tests/test_revision_106.py",
+    "tests/test_revision_107.py",
     "tests/test_uninstall_safety.py",
     "uninstall.sh",
     "validate_release.sh",

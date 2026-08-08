@@ -86,7 +86,17 @@ def window_controls_enabled(current: F5Status) -> bool:
 
 
 def window_visible() -> bool:
-    return bool(_run(["xdotool", "search", "--onlyvisible", "--class", F5_WINDOW_CLASS]))
+    wid = window_id()
+    if not wid:
+        return False
+
+    state = _run(["xprop", "-id", wid, "_NET_WM_STATE"])
+    if state.startswith("_NET_WM_STATE"):
+        return "_NET_WM_STATE_HIDDEN" not in state
+
+    # Fallback for desktops without xprop/EWMH state reporting.
+    instance = F5_WINDOW_CLASS.split(".", 1)[0]
+    return bool(_run(["xdotool", "search", "--onlyvisible", "--classname", instance]))
 
 
 def _run(command: list[str], timeout: float = 4.0) -> str:
@@ -300,6 +310,13 @@ def show_window() -> tuple[bool, str]:
     try:
         subprocess.run(
             ["wmctrl", "-i", "-r", wid, "-b", "remove,skip_taskbar"],
+            text=True,
+            capture_output=True,
+            timeout=4,
+            check=False,
+        )
+        subprocess.run(
+            ["wmctrl", "-i", "-r", wid, "-b", "remove,hidden"],
             text=True,
             capture_output=True,
             timeout=4,

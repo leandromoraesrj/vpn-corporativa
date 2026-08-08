@@ -1,4 +1,4 @@
-# VPN Corporativa 1.1.1
+# VPN Corporativa 1.1.2
 
 Aplicação Linux para conexão a uma VPN corporativa com split tunneling, painel GTK,
 configuração integrada e diagnóstico de rede.
@@ -59,6 +59,7 @@ O `install.sh` verifica ou instala, por meio do `apt`, os seguintes pacotes:
 - `python3-gi`;
 - `gir1.2-gtk-3.0`;
 - `gir1.2-ayatanaappindicator3-0.1`;
+- `gir1.2-secret-1`;
 - `libnotify-bin`;
 - `xdg-utils`;
 - `curl`;
@@ -97,16 +98,24 @@ criar snapshot persistente da senha.
 ~/.local/state/vpn/connection.log
 ~/.local/state/vpn/diagnostic-latest.txt
 ~/.local/state/vpn/launcher.log
+~/.local/state/vpn/tray-icon-*.svg
 ```
 
-A versão 1.1.1 não usa `/tmp` para logs permanentes e remove resíduos conhecidos
+A versão 1.1.2 não usa `/tmp` para logs permanentes e remove resíduos conhecidos
 de versões anteriores durante a instalação.
+
+Os SVGs `tray-icon-*.svg` são estados transitórios do ícone dividido e não
+contêm credenciais.
 
 ## Remoção
 
 ```bash
 sudo ./uninstall.sh
 ```
+
+O desinstalador pergunta separadamente se deve preservar a configuração e se
+deve remover a credencial do GNOME Keyring. A remoção do segredo só prossegue
+após confirmação explícita e, se falhar, a desinstalação é interrompida.
 
 ## Testes isolados
 
@@ -121,7 +130,7 @@ rotas, `/etc/hosts` ou a instalação ativa.
 
 ## Política de notificações
 
-A versão 1.1.1 exibe notificações do sistema somente em caso de erro real:
+A versão 1.1.2 exibe notificações do sistema somente em caso de erro real:
 
 - falha ao conectar;
 - falha definitiva após as tentativas de reconexão;
@@ -134,7 +143,9 @@ mostrados apenas no painel, no estado do ícone ou na aba correspondente.
 O ícone da bandeja é dividido entre a VPN principal e a VPN secundária: cada
 metade fica verde quando a VPN correspondente está
 conectada. O menu oferece **Conectar**/**Desconectar**,
-**Autenticar VPN secundária**/**Exibir F5** e **Abrir painel de vpn corporativa**.
+status independente das duas conexões, **Conectar VPN Principal**/**Desconectar
+VPN Principal**, **Autenticar VPN Secundária**/**Exibir F5**/**Ocultar F5** e
+**Abrir Painel de VPN Corporativa**.
 Esse último item executa novamente o teste de integridade antes de abrir e
 focar o painel.
 ## Diagnóstico final

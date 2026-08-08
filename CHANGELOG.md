@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.2 — 2026-08-07
+
+- corrigida a detecção da visibilidade e a alternância dos controles da janela F5;
+- corrigida a atualização do menu e dos botões após exibir ou ocultar a janela;
+- status da bandeja identificados como VPN Principal e VPN Secundária;
+- corrigida a remoção dos ícones divididos no uninstall;
+- manifesto, documentação e testes sincronizados com a versão publicada.
+
 ## 1.1.1 — 2026-08-07
 
 - Aprimorado o ícone da bandeja com estados independentes das duas VPNs.

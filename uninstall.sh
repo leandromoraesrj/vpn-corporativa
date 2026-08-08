@@ -128,6 +128,7 @@ rm -f /usr/local/libexec/vpn-privileged-validation.py
 rm -f /usr/local/libexec/vpn-openfortivpn.py
 rm -f /usr/local/share/icons/vpn.svg
 rm -f /usr/local/share/icons/vpn-corporativa-{gray,yellow,green,red}.svg
+rm -f /usr/local/share/icons/vpn-corporativa-{primary,secondary}.svg
 rm -f /etc/sudoers.d/vpn
 rm -f "$TARGET_HOME/.local/share/applications/vpn.desktop"
 rm -f "$TARGET_HOME/.config/autostart/vpn.desktop"

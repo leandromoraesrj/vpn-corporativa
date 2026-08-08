@@ -35,12 +35,12 @@ class Revision102Tests(unittest.TestCase):
         self.assertIn('TARGET_GROUP="$(id -gn "$TARGET_USER")"', installer)
         self.assertNotIn('-g "$TARGET_USER"', installer)
         self.assertIn('Name=VPN Corporativa', installer)
-        self.assertIn('VPN CORPORATIVA 1.1.1 — PRODUÇÃO', installer)
+        self.assertIn('VPN CORPORATIVA 1.1.2 — PRODUÇÃO', installer)
         self.assertEqual(installer.count('Version=1.0'), 2)
 
     def test_application_uses_release_version(self):
         app = (ROOT / "vpn_app/app.py").read_text(encoding="utf-8")
-        self.assertIn('APP_VERSION = "1.1.1"', app)
+        self.assertIn('APP_VERSION = "1.1.2"', app)
         self.assertIn('Gtk.Window(title="Painel VPN Corporativa - Centro de Controle da Rede")', app)
 
     def test_audit_uses_terminal_only_and_safe_user_fallback(self):
@@ -89,10 +89,9 @@ class Revision102Tests(unittest.TestCase):
             "button.set_sensitive(f5_backend.authentication_enabled(f5))",
             app,
         )
-        self.assertIn(
-            "button.set_sensitive(f5_backend.window_controls_enabled(f5))",
-            app,
-        )
+        self.assertIn("window_available = f5_backend.window_controls_enabled(f5)", app)
+        self.assertIn("self.f5_hide_button.set_sensitive(window_available and window_visible)", app)
+        self.assertIn("self.f5_show_button.set_sensitive(window_available and not window_visible)", app)
 
     def test_primary_panel_uses_exact_vpn_titles(self):
         app = (ROOT / "vpn_app/app.py").read_text(encoding="utf-8")
