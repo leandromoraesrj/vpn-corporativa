@@ -17,12 +17,19 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
 from gi.repository import AyatanaAppIndicator3, Gdk, GLib, Gtk
 
-from . import config_store, f5_backend, network, secret_store
+from . import (
+    certificate_diagnostics,
+    config_store,
+    f5_backend,
+    network,
+    privileged_validation,
+    secret_store,
+)
 
 LOGGER = logging.getLogger(__name__)
 
-APP_VERSION = "1.1.2"
-APP_NAME = "VPN Corporativa"
+APP_VERSION = "1.1.3"
+APP_NAME = "Centro de Controle da Rede e VPN"
 APP_ID = "br.local.vpncorporativa"
 CONNECT_HELPER = "/usr/local/libexec/vpn-connect"
 DISCONNECT_HELPER = "/usr/local/libexec/vpn-disconnect"
@@ -57,9 +64,14 @@ class VPNApplication:
         self.labels: dict[str, Gtk.Label] = {}
         self.config_entries: dict[str, Gtk.Entry] = {}
         self.secondary_url_entry: Gtk.Entry | None = None
+        self.secondary_interface_candidates: Gtk.ComboBoxText | None = None
+        self.secondary_candidate_values: list[str] = []
+        self.secondary_candidate_details: list[str] = []
+        self.secondary_discovery_label: Gtk.Label | None = None
         self.routes_view: Gtk.TextView | None = None
         self.hosts_view: Gtk.TextView | None = None
         self.diagnostic_view: Gtk.TextView | None = None
+        self.last_credential_diagnostic = ""
         self.diagnostic_status_label: Gtk.Label | None = None
         self.diagnostic_running = False
         self.notebook: Gtk.Notebook | None = None
@@ -76,6 +88,7 @@ class VPNApplication:
         self.desired_connected = False
         self.reconnect_in_progress = False
         self.reconnect_status = ""
+        self.auto_reconnect_primary = True
         self.manual_disconnect = False
         self.connect_button: Gtk.Button | None = None
         self.disconnect_button: Gtk.Button | None = None
@@ -108,6 +121,12 @@ class VPNApplication:
         self.indicator = self._build_indicator()
 
         config_store.ensure_config_dir()
+        try:
+            self.auto_reconnect_primary = config_store.read_auto_reconnect_primary()
+        except (OSError, UnicodeError):
+            LOGGER.warning(
+                "Preferência de reconexão automática indisponível; usando o padrão ativado."
+            )
         self.integrity_status_markup = self._check_integrity_markup()
         if self.last_connected:
             self.connected_since = time.monotonic()
@@ -123,13 +142,13 @@ class VPNApplication:
         return "CONECTADA" if bool(network.vpn_interface()) else "DESCONECTADA"
 
     @staticmethod
-    def _secondary_status_text() -> str:
-        return f5_backend.status().label
+    def _secondary_status_text(current: f5_backend.F5Status | None = None) -> str:
+        return (current or f5_backend.status()).label
 
-    def _tray_title(self) -> str:
+    def _tray_title(self, current: f5_backend.F5Status | None = None) -> str:
         primary = self._primary_status_text().lower()
-        secondary = self._secondary_status_text().lower()
-        return f"VPN Corporativa — Principal: {primary} | Secundária: {secondary}"
+        secondary = self._secondary_status_text(current).lower()
+        return f"Centro de Controle da Rede e VPN — Principal: {primary} | Secundária: {secondary}"
 
     @staticmethod
     def _connected_icon(primary_connected: bool, secondary_connected: bool) -> str:
@@ -169,8 +188,11 @@ class VPNApplication:
             )
         return str(path)
 
-    def _tray_states(self) -> tuple[str, str]:
-        f5 = f5_backend.status()
+    def _tray_states(
+        self,
+        current: f5_backend.F5Status | None = None,
+    ) -> tuple[str, str]:
+        f5 = current or f5_backend.status()
         if self.primary_error:
             primary = "error"
         elif self.is_connecting or self.reconnect_status:
@@ -180,7 +202,7 @@ class VPNApplication:
         else:
             primary = "off"
 
-        if f5.inconsistent:
+        if not f5.connected and f5.inconsistent:
             secondary = "error"
         elif f5.connected:
             secondary = "on"
@@ -190,8 +212,8 @@ class VPNApplication:
             secondary = "off"
         return primary, secondary
 
-    def _tray_icon(self) -> str:
-        primary, secondary = self._tray_states()
+    def _tray_icon(self, current: f5_backend.F5Status | None = None) -> str:
+        primary, secondary = self._tray_states(current)
         return self._split_icon_path(primary, secondary)
 
     def can_connect(self, _item=None) -> bool:
@@ -217,7 +239,7 @@ class VPNApplication:
             if self.menu_secondary_action is not None
             else ""
         )
-        if action_label == "Ocultar F5":
+        if action_label == "Ocultar VPN secundária":
             self.hide_f5()
             self._refresh_controls()
         else:
@@ -236,27 +258,27 @@ class VPNApplication:
 
         menu = Gtk.Menu()
 
-        open_item = Gtk.MenuItem(label="Abrir Painel de VPN Corporativa")
+        open_item = Gtk.MenuItem(label="Abrir Centro de Controle")
         open_item.connect("activate", lambda *_: self._open_panel_from_tray())
         menu.append(open_item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
-        self.menu_primary_status = Gtk.MenuItem(label="VPN Principal: Verificando...")
+        self.menu_primary_status = Gtk.MenuItem(label="VPN principal: verificando...")
         self.menu_primary_status.set_sensitive(False)
         menu.append(self.menu_primary_status)
 
-        self.menu_secondary_status = Gtk.MenuItem(label="VPN Secundária: Verificando...")
+        self.menu_secondary_status = Gtk.MenuItem(label="VPN secundária: verificando...")
         self.menu_secondary_status.set_sensitive(False)
         menu.append(self.menu_secondary_status)
 
         menu.append(Gtk.SeparatorMenuItem())
 
-        self.menu_primary_action = Gtk.MenuItem(label="Conectar VPN Principal")
+        self.menu_primary_action = Gtk.MenuItem(label="Conectar VPN principal")
         self.menu_primary_action.connect("activate", self._activate_primary_menu)
         menu.append(self.menu_primary_action)
 
-        self.menu_secondary_action = Gtk.MenuItem(label="Autenticar VPN Secundária")
+        self.menu_secondary_action = Gtk.MenuItem(label="Autenticar VPN secundária")
         self.menu_secondary_action.connect("activate", self._activate_secondary_menu)
         menu.append(self.menu_secondary_action)
 
@@ -274,30 +296,32 @@ class VPNApplication:
         connected = bool(network.vpn_interface())
         f5 = f5_backend.status()
 
-        icon = self._tray_icon()
+        icon = self._tray_icon(f5)
 
-        title = self._tray_title()
+        title = self._tray_title(f5)
         self.indicator.set_icon_full(icon, title)
         self.indicator.set_title(title)
         if self.menu_primary_status is not None:
-            self.menu_primary_status.set_label(f"VPN Principal: {self._primary_status_text()}")
+            self.menu_primary_status.set_label(f"VPN principal: {self._primary_status_text()}")
         if self.menu_secondary_status is not None:
-            self.menu_secondary_status.set_label(f"VPN Secundária: {self._secondary_status_text()}")
+            self.menu_secondary_status.set_label(
+                f"VPN secundária: {self._secondary_status_text(f5)}"
+            )
         if self.menu_primary_action is not None:
             self.menu_primary_action.set_label(
-                "Desconectar VPN Principal"
+                "Desconectar VPN principal"
                 if self.can_disconnect()
-                else "Conectar VPN Principal"
+                else "Conectar VPN principal"
             )
         if self.menu_secondary_action is not None:
             self.menu_secondary_action.set_label(
                 (
-                    "Ocultar F5"
+                    "Ocultar VPN secundária"
                     if f5_backend.window_visible()
-                    else "Exibir F5"
+                    else "Exibir VPN secundária"
                 )
                 if f5.connected
-                else "Autenticar VPN Secundária"
+                else "Autenticar VPN secundária"
             )
 
         if self.connect_button is not None:
@@ -330,7 +354,7 @@ class VPNApplication:
         subprocess.run(["notify-send", APP_NAME, message], check=False)
 
     def _build_window(self) -> None:
-        window = Gtk.Window(title="Painel VPN Corporativa - Centro de Controle da Rede")
+        window = Gtk.Window(title="Centro de Controle da Rede e VPN")
         window.set_default_size(820, -1)
         window.set_position(Gtk.WindowPosition.CENTER)
         window.connect("realize", self._disable_window_maximize)
@@ -342,7 +366,7 @@ class VPNApplication:
         window.add(root)
 
         title = Gtk.Label()
-        title.set_markup("<span size='x-large' weight='bold'>Painel VPN Corporativa — Centro de Controle da Rede</span>")
+        title.set_markup("<span size='x-large' weight='bold'>Centro de Controle da Rede e VPN</span>")
         title.set_xalign(0)
         root.pack_start(title, False, False, 0)
 
@@ -522,10 +546,18 @@ class VPNApplication:
         vpn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         content.pack_start(vpn_row, False, False, 0)
 
-        primary_frame = Gtk.Frame(label="VPN principal (OpenFortiVPN)")
+        primary_frame = Gtk.Frame(label="VPN principal")
         primary_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         primary_box.set_border_width(10)
         primary_frame.add(primary_box)
+
+        primary_info = Gtk.Label(
+            label="Otimização e gerenciamento da conexão corporativa principal."
+        )
+        primary_info.set_xalign(0)
+        primary_info.set_line_wrap(True)
+        primary_info.set_max_width_chars(32)
+        primary_box.pack_start(primary_info, False, False, 0)
 
         primary_grid = Gtk.Grid()
         primary_grid.set_column_spacing(14)
@@ -564,10 +596,18 @@ class VPNApplication:
         primary_frame.set_size_request(summary_card_width, -1)
         vpn_row.pack_start(primary_frame, False, False, 0)
 
-        secondary_frame = Gtk.Frame(label="VPN secundária (BIG-IP/F5)")
+        secondary_frame = Gtk.Frame(label="VPN secundária")
         secondary_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         secondary_box.set_border_width(10)
         secondary_frame.add(secondary_box)
+
+        secondary_info = Gtk.Label(
+            label="Autenticação web manual; conexão acompanhada e monitorada pelo aplicativo."
+        )
+        secondary_info.set_xalign(0)
+        secondary_info.set_line_wrap(True)
+        secondary_info.set_max_width_chars(32)
+        secondary_box.pack_start(secondary_info, False, False, 0)
 
         secondary_grid = Gtk.Grid()
         secondary_grid.set_column_spacing(14)
@@ -576,7 +616,7 @@ class VPNApplication:
             ("Estado", "secondary_status"),
             ("Interface", "secondary_interface"),
             ("IP VPN", "secondary_ip"),
-            ("Janela F5", "secondary_window"),
+            ("Janela da VPN secundária", "secondary_window"),
         ]):
             self._add_row(secondary_grid, row, label, key)
         secondary_box.pack_start(secondary_grid, False, True, 0)
@@ -593,14 +633,14 @@ class VPNApplication:
 
         secondary_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         secondary_buttons.set_homogeneous(True)
-        hide_f5 = Gtk.Button(label="Ocultar F5")
+        hide_f5 = Gtk.Button(label="Ocultar VPN secundária")
         hide_f5.set_size_request(summary_button_width, -1)
         hide_f5.connect("clicked", lambda *_: self.hide_f5())
         secondary_buttons.pack_start(hide_f5, True, True, 0)
         self.f5_window_buttons.append(hide_f5)
         self.f5_hide_button = hide_f5
 
-        show_f5 = Gtk.Button(label="Exibir F5")
+        show_f5 = Gtk.Button(label="Exibir VPN secundária")
         show_f5.set_size_request(summary_button_width, -1)
         show_f5.connect("clicked", lambda *_: self.show_f5())
         secondary_buttons.pack_start(show_f5, True, True, 0)
@@ -630,7 +670,7 @@ class VPNApplication:
         outer.pack_start(controls, False, False, 0)
 
         run_button = self._full_width_button(
-            "Executar diagnóstico",
+            "Executar diagnóstico geral",
             self.run_diagnostic,
         )
         controls.pack_start(run_button, True, True, 0)
@@ -638,6 +678,7 @@ class VPNApplication:
         view = Gtk.TextView()
         view.set_editable(False)
         view.set_monospace(True)
+        view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         scroll = Gtk.ScrolledWindow()
         scroll.add(view)
         outer.pack_start(scroll, True, True, 0)
@@ -673,19 +714,24 @@ class VPNApplication:
             ("Porta", "port", False),
             ("Usuário", "username", False),
             ("Senha", "password", True),
-            ("Certificado confiável", "trusted-cert", False),
         ]):
             self._entry_row(connection, row, *args)
 
+        self.auto_reconnect_check = Gtk.CheckButton(
+            label="Reconexão automática da VPN principal"
+        )
+        self.auto_reconnect_check.set_active(self.auto_reconnect_primary)
+        connection.attach(self.auto_reconnect_check, 0, 4, 2, 1)
+
         save_connection = self._full_width_button(
-            "Salvar conexão",
+            "Salvar configuração da VPN principal",
             self.save_connection,
         )
         connection.attach(save_connection, 0, 5, 2, 1)
         notebook.append_page(connection, Gtk.Label(label="VPN principal"))
 
         secondary_frame = Gtk.Frame(
-            label="VPN secundária — autenticação via navegador"
+            label="VPN secundária"
         )
         secondary_box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
@@ -697,9 +743,7 @@ class VPNApplication:
         explanation = Gtk.Label(
             label=(
                 "Utilize esta configuração quando a VPN secundária realizar "
-                "autenticação web pelo\n"
-                "navegador, como BIG-IP/F5, em vez de usuário e senha pelo "
-                "openfortivpn."
+                "autenticação web pelo navegador."
             )
         )
         explanation.set_xalign(0)
@@ -716,16 +760,30 @@ class VPNApplication:
         url_entry.set_hexpand(True)
         url_entry.set_placeholder_text("https://vpn.example.com/")
         secondary_grid.attach(url_label, 0, 0, 1, 1)
-        secondary_grid.attach(url_entry, 1, 0, 1, 1)
+        secondary_grid.attach(url_entry, 1, 0, 2, 1)
         self.secondary_url_entry = url_entry
 
-        save_secondary = Gtk.Button(label="Salvar URL de autenticação")
-        save_secondary.connect("clicked", lambda *_: self.save_secondary_url())
-        secondary_grid.attach(save_secondary, 0, 1, 2, 1)
-        authenticate_secondary = Gtk.Button(label="Autenticar VPN secundária")
-        authenticate_secondary.connect("clicked", lambda *_: self.open_f5())
-        secondary_grid.attach(authenticate_secondary, 0, 2, 2, 1)
-        self.f5_auth_buttons.append(authenticate_secondary)
+        interface_label = Gtk.Label(label="Interface da VPN secundária")
+        interface_label.set_xalign(0)
+        secondary_grid.attach(interface_label, 0, 1, 1, 1)
+        candidates = Gtk.ComboBoxText()
+        candidates.set_hexpand(True)
+        candidates.connect("changed", self._select_secondary_candidate)
+        self.secondary_interface_candidates = candidates
+        secondary_grid.attach(candidates, 1, 1, 1, 1)
+        refresh_interfaces = Gtk.Button(label="Atualizar interfaces")
+        refresh_interfaces.connect("clicked", lambda *_: self.refresh_secondary_interfaces())
+        secondary_grid.attach(refresh_interfaces, 2, 1, 1, 1)
+        self.secondary_discovery_label = Gtk.Label()
+        self.secondary_discovery_label.set_xalign(0)
+        self.secondary_discovery_label.set_line_wrap(True)
+        self.secondary_discovery_label.set_max_width_chars(70)
+        self.secondary_discovery_label.set_hexpand(True)
+        secondary_grid.attach(self.secondary_discovery_label, 0, 2, 3, 1)
+
+        save_secondary = Gtk.Button(label="Salvar configurações da VPN secundária")
+        save_secondary.connect("clicked", lambda *_: self.save_secondary_configuration())
+        secondary_grid.attach(save_secondary, 0, 3, 3, 1)
         secondary_box.pack_start(secondary_grid, False, True, 0)
         notebook.append_page(secondary_frame, Gtk.Label(label="VPN secundária"))
 
@@ -776,6 +834,8 @@ class VPNApplication:
                 LOGGER.warning("Migração da credencial para o Secret Service não foi concluída.")
         for key, entry in self.config_entries.items():
             entry.set_text(values.get(key, ""))
+        if hasattr(self, "auto_reconnect_check"):
+            self.auto_reconnect_check.set_active(self.auto_reconnect_primary)
 
         if self.routes_view:
             self.routes_view.get_buffer().set_text("\n".join(config_store.read_routes()))
@@ -783,16 +843,24 @@ class VPNApplication:
             self.hosts_view.get_buffer().set_text("\n".join(config_store.read_hosts()))
         if self.secondary_url_entry is not None:
             self.secondary_url_entry.set_text(config_store.read_secondary_url())
+        if self.secondary_interface_candidates is not None:
+            self.refresh_secondary_interfaces(f5_backend.configured_interface())
 
     def save_connection(self) -> None:
-        values = {key: entry.get_text() for key, entry in self.config_entries.items()}
+        values = config_store.read_key_values()
+        values.update({key: entry.get_text() for key, entry in self.config_entries.items()})
         try:
             password = values.pop("password", "")
+            username = config_store.validate_connection(values)["username"]
             if password:
-                secret_store.store(values.get("username", ""), password)
-            elif not secret_store.lookup(values.get("username", "")):
-                raise ValueError("Informe a senha da VPN para armazená-la no Secret Service.")
+                secret_store.store(username, password)
+            elif not secret_store.lookup(username):
+                raise ValueError("Informe a senha da VPN para armazená-la no GNOME Keyring.")
             config_store.save_connection(values)
+            self.auto_reconnect_primary = self.auto_reconnect_check.get_active()
+            config_store.save_auto_reconnect_primary(self.auto_reconnect_primary)
+            if self.auto_reconnect_primary and self.reconnect_status == "RECONEXÃO AUTOMÁTICA DESATIVADA":
+                self.reconnect_status = ""
         except RuntimeError:
             self._show_message(
                 "Não foi possível salvar a conexão",
@@ -806,12 +874,123 @@ class VPNApplication:
         self._show_message("Configuração salva", "Os dados da conexão foram atualizados.")
 
     @staticmethod
+    def _certificate_diagnostic_result(
+        values: dict[str, str],
+        configuration_valid: bool = True,
+    ) -> certificate_diagnostics.CertificateDiagnostic:
+        host = values.get("host", "").strip()
+        policy = values.get("certificate-policy", "legacy-pinned")
+        if not configuration_valid:
+            return certificate_diagnostics.configuration_failure(
+                host,
+                policy,
+                "O snapshot salvo de connection.conf não pôde ser validado.",
+            )
+        try:
+            port = int(values.get("port", ""))
+            if not 1 <= port <= 65535:
+                raise ValueError
+        except ValueError:
+            return certificate_diagnostics.configuration_failure(
+                host,
+                policy,
+                "A porta salva em connection.conf é inválida.",
+            )
+        if not host:
+            return certificate_diagnostics.configuration_failure(
+                host,
+                policy,
+                "O host salvo em connection.conf está ausente.",
+            )
+        try:
+            return certificate_diagnostics.diagnose(
+                host,
+                port,
+                values.get("trusted-cert", ""),
+                policy,
+            )
+        except Exception:
+            LOGGER.warning("Diagnóstico de certificado indisponível.")
+            return certificate_diagnostics.CertificateDiagnostic(
+                hostname=host,
+                subject="Indisponível",
+                san=(),
+                issuer="Indisponível",
+                not_before="Indisponível",
+                not_after="Indisponível",
+                fingerprint_sha256="Indisponível",
+                ca_status="Indisponível",
+                hostname_status="Indisponível",
+                fingerprint_match="Indisponível",
+                reason="Não foi possível concluir uma observação TLS correlacionada.",
+                policy=policy,
+                severity="WARNING",
+                warning_count=1,
+                indeterminate_count=1,
+            )
+
+    @staticmethod
+    def _certificate_diagnostic_snapshot() -> tuple[dict[str, str], bool]:
+        try:
+            normalized = privileged_validation.parse_connection(
+                config_store.CONNECTION_FILE
+            )
+        except (KeyError, OSError, UnicodeError, ValueError):
+            return {}, False
+        snapshot = {
+            key: normalized.get(key, "")
+            for key in ("host", "port", "certificate-policy", "trusted-cert")
+        }
+        return snapshot, True
+
+    @staticmethod
+    def _integrated_diagnostic_counts(
+        helper_report: str,
+        helper_return_code: int,
+        certificate_result: certificate_diagnostics.CertificateDiagnostic,
+    ) -> tuple[int, int]:
+        summaries = re.findall(
+            r"RESUMO: (\d+) falha\(s\), (\d+) aviso\(s\)",
+            helper_report,
+        )
+        if summaries:
+            helper_failures, helper_warnings = map(int, summaries[-1])
+            if helper_return_code != 0:
+                helper_failures = max(helper_failures, 1)
+        else:
+            helper_failures = int(helper_return_code != 0)
+            helper_warnings = int(helper_return_code == 0)
+        return (
+            helper_failures + certificate_result.critical_count,
+            helper_warnings + certificate_result.warning_count,
+        )
+
+    @staticmethod
     def _credential_frame() -> bytes:
+        if not config_store.CONNECTION_FILE.is_file():
+            raise RuntimeError(
+                "A configuração da VPN principal não foi encontrada. "
+                "Restaure uma configuração autorizada ou reexecute o instalador "
+                "para reprovisionar a VPN principal."
+            )
         values = config_store.read_key_values()
         username = values.get("username", "")
-        password = secret_store.lookup(username)
-        if not password:
-            raise RuntimeError("A senha da VPN não está disponível no Secret Service.")
+        if not username:
+            raise RuntimeError(
+                "O usuário da VPN principal não está configurado. "
+                "Revise a aba Configuração."
+            )
+        password, status, details = secret_store.lookup_diagnostic(username)
+        if status == "indisponivel":
+            raise RuntimeError(
+                "O GNOME Keyring está indisponível. Inicie o Secret Service e tente novamente."
+            )
+        if status == "ausente" or not password:
+            raise RuntimeError(
+                "Credencial não encontrada no GNOME Keyring. "
+                "Cadastre a credencial usando os atributos "
+                f"{details['attributes']} e tente novamente."
+            )
         encoded = password.encode("utf-8")
         if len(encoded) > 4096:
             raise RuntimeError("A credencial da VPN é inválida.")
@@ -859,21 +1038,107 @@ class VPNApplication:
             return
         self._show_message("Mapa de hosts salvo", "Os nomes corporativos foram atualizados.")
 
-    def save_secondary_url(self) -> None:
+    def _selected_secondary_interface(self) -> str:
+        if self.secondary_interface_candidates is None:
+            return ""
+        index = self.secondary_interface_candidates.get_active()
+        if 0 <= index < len(self.secondary_candidate_values):
+            return self.secondary_candidate_values[index]
+        return ""
+
+    def save_secondary_configuration(self) -> None:
         assert self.secondary_url_entry is not None
         try:
             config_store.save_secondary_url(self.secondary_url_entry.get_text())
+            selected_interface = self._selected_secondary_interface()
+            config_store.save_secondary_interface(
+                selected_interface or f5_backend.configured_interface()
+            )
         except (OSError, ValueError) as exc:
             self._show_message(
-                "Não foi possível salvar a URL de autenticação",
+                "Não foi possível salvar a configuração da VPN secundária",
                 str(exc),
                 error=True,
             )
             return
         self._show_message(
-            "URL de autenticação salva",
-            "A VPN secundária usará a URL configurada localmente.",
+            "Configuração da VPN secundária salva",
+            "A URL e a interface selecionada foram atualizadas.",
         )
+
+    def _select_secondary_candidate(self, combo: Gtk.ComboBoxText) -> None:
+        index = combo.get_active()
+        if index < 0 or index >= len(self.secondary_candidate_values):
+            return
+        details = self.secondary_candidate_details[index]
+        combo.set_tooltip_text(details)
+        if self.secondary_discovery_label is not None:
+            self.secondary_discovery_label.set_text(
+                f"Interface {self.secondary_candidate_values[index]} selecionada. "
+                "Confirme em Salvar configurações da VPN secundária."
+            )
+
+    def refresh_secondary_interfaces(self, preferred_interface: str | None = None) -> None:
+        if self.secondary_interface_candidates is None:
+            return
+        configured_interface = (
+            f5_backend.configured_interface()
+            if preferred_interface is None
+            else preferred_interface
+        )
+        previous = self._selected_secondary_interface()
+        if not previous:
+            previous = configured_interface
+        self.secondary_interface_candidates.remove_all()
+        self.secondary_candidate_values = []
+        self.secondary_candidate_details = []
+        candidates = f5_backend.discover_interface_candidates()
+        for candidate in candidates:
+            state = "ativa" if candidate.active else "inativa"
+            address = candidate.ipv4 or "sem IPv4 válido"
+            routes = ", ".join(candidate.routes) if candidate.routes else "nenhuma"
+            details = (
+                f"Estado: {state}\nTipo: {candidate.kind}\nIPv4: {address}\n"
+                f"Rotas: {routes}\nObservação: {candidate.observation}"
+            )
+            self.secondary_interface_candidates.append_text(candidate.name)
+            self.secondary_candidate_values.append(candidate.name)
+            self.secondary_candidate_details.append(details)
+        active_index = self._secondary_candidate_index_after_refresh(
+            self.secondary_candidate_values,
+            previous,
+        )
+        self.secondary_interface_candidates.set_active(active_index)
+        if self.secondary_discovery_label is not None:
+            if active_index >= 0:
+                self.secondary_discovery_label.set_text(
+                    f"Interface {self.secondary_candidate_values[active_index]} selecionada. "
+                    "Confirme em Salvar configurações da VPN secundária."
+                )
+            elif configured_interface == "":
+                self.secondary_discovery_label.set_text(
+                    "Modo de descoberta manual ativo. O estado operacional da VPN "
+                    "secundária não será monitorado como CONECTADA até que uma interface "
+                    "seja selecionada e salva. Após autenticar manualmente, clique em "
+                    "Atualizar interfaces, selecione a interface correta e salve a configuração."
+                )
+            elif not candidates:
+                self.secondary_discovery_label.set_text(
+                    "Nenhuma interface candidata encontrada. Conecte manualmente a VPN secundária antes de atualizar a lista."
+                )
+            else:
+                self.secondary_discovery_label.set_text(
+                    "Selecione uma interface candidata e confirme em Salvar configurações da VPN secundária."
+                )
+
+    @staticmethod
+    def _secondary_candidate_index_after_refresh(values: list[str], previous: str) -> int:
+        if not values:
+            return -1
+        if previous in values:
+            return values.index(previous)
+        return -1
+
 
     def _show_message(self, title: str, detail: str, error: bool = False) -> None:
         dialog = Gtk.MessageDialog(
@@ -901,7 +1166,7 @@ class VPNApplication:
 
         failures = [name for name, path in checks if not path.exists()]
 
-        for command in ("openfortivpn", "ip", "ping"):
+        for command in ("openfortivpn", "ip", "ping", "openssl"):
             result = subprocess.run(
                 ["bash", "-lc", f"command -v {command}"],
                 stdout=subprocess.DEVNULL,
@@ -972,9 +1237,10 @@ class VPNApplication:
             with LOG_PATH.open("w", encoding="utf-8") as log:
                 try:
                     process = self._start_connect_helper(log)
-                except (OSError, RuntimeError, ValueError):
-                    LOGGER.warning("Não foi possível preparar a credencial.")
-                    GLib.idle_add(self._connection_failed, 1)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    self.last_credential_diagnostic = str(exc)
+                    LOGGER.warning("Não foi possível preparar a credencial: %s", self.last_credential_diagnostic)
+                    GLib.idle_add(self._connection_failed, 1, self.last_credential_diagnostic)
                     return
 
                 connected = False
@@ -1005,10 +1271,11 @@ class VPNApplication:
         self.primary_error = False
         self.last_connected = True
         self.connected_since = time.monotonic()
+        self.reconnect_status = ""
         self._refresh_controls()
         return False
 
-    def _connection_failed(self, _return_code: int) -> bool:
+    def _connection_failed(self, _return_code: int, reason: str = "") -> bool:
         self.is_connecting = False
         self.primary_error = True
         self.last_connected = False
@@ -1016,7 +1283,7 @@ class VPNApplication:
             self.desired_connected = False
         self._refresh_controls()
 
-        self._notify("Falha ao conectar. Consulte o Log da conexão.")
+        self._notify(reason or "Falha ao conectar. Consulte o Log da conexão.")
         return False
 
     def disconnect_vpn(self) -> None:
@@ -1041,6 +1308,10 @@ class VPNApplication:
         return False
 
     def _start_reconnect(self, reason: str) -> None:
+        if not self.auto_reconnect_primary:
+            self.reconnect_status = "RECONEXÃO AUTOMÁTICA DESATIVADA"
+            self._refresh_controls()
+            return
         if (
             self.reconnect_in_progress
             or not self.desired_connected
@@ -1067,6 +1338,18 @@ class VPNApplication:
                     f"AGUARDANDO INTERNET — tentativa {attempt}/{len(delays)} em {delay}s",
                 )
                 time.sleep(delay)
+
+                if not self.desired_connected or self.manual_disconnect:
+                    GLib.idle_add(self._finish_reconnect_cancelled)
+                    return
+
+                if not self.auto_reconnect_primary:
+                    GLib.idle_add(
+                        self._set_reconnect_status,
+                        "RECONEXÃO AUTOMÁTICA DESATIVADA",
+                    )
+                    GLib.idle_add(self._finish_reconnect_cancelled, True)
+                    return
 
                 if not network.internet_available():
                     continue
@@ -1098,7 +1381,17 @@ class VPNApplication:
                             GLib.idle_add(self._finish_reconnect_cancelled)
                             return
 
-                        if network.vpn_interface():
+                        connected_interface = network.vpn_interface()
+                        if not self.auto_reconnect_primary:
+                            self._stop_connect_process(process)
+                            GLib.idle_add(
+                                self._set_reconnect_status,
+                                "RECONEXÃO AUTOMÁTICA DESATIVADA",
+                            )
+                            GLib.idle_add(self._finish_reconnect_cancelled, True)
+                            return
+
+                        if connected_interface:
                             GLib.idle_add(
                                 self._finish_reconnect_success,
                                 attempt,
@@ -1141,10 +1434,12 @@ class VPNApplication:
         )
         return False
 
-    def _finish_reconnect_cancelled(self) -> bool:
+    def _finish_reconnect_cancelled(self, keep_reason: bool = False) -> bool:
         self.reconnect_in_progress = False
-        self.reconnect_status = ""
+        if not keep_reason:
+            self.reconnect_status = ""
         self.is_connecting = False
+        self.primary_error = False
         self._refresh_controls()
         return False
 
@@ -1210,6 +1505,9 @@ class VPNApplication:
                 "Docker, rotas corporativas e firewall. Aguarde..."
             )
 
+        certificate_values, certificate_configuration_valid = (
+            self._certificate_diagnostic_snapshot()
+        )
 
         def worker():
             try:
@@ -1219,21 +1517,40 @@ class VPNApplication:
                     capture_output=True,
                     check=False,
                 )
+                certificate_result = self._certificate_diagnostic_result(
+                    certificate_values,
+                    certificate_configuration_valid,
+                )
+                certificate_report = (
+                    "Certificado da VPN principal\n"
+                    + certificate_diagnostics.format_diagnostic(certificate_result)
+                )
+                helper_report = result.stdout + result.stderr
+                failures, warnings = self._integrated_diagnostic_counts(
+                    helper_report,
+                    result.returncode,
+                    certificate_result,
+                )
+                separator = "\n\n" if helper_report else ""
                 DIAG_PATH.write_text(
-                    result.stdout + result.stderr,
+                    helper_report
+                    + separator
+                    + certificate_report
+                    + f"\n\nRESUMO GERAL: {failures} falha(s), {warnings} aviso(s)\n",
                     encoding="utf-8",
                 )
-                GLib.idle_add(self._finish_diagnostic, result.returncode)
-            except Exception as exc:
+                GLib.idle_add(self._finish_diagnostic, failures, warnings)
+            except Exception:
                 DIAG_PATH.write_text(
-                    f"Falha ao executar diagnóstico: {exc}\n",
+                    "Falha ao executar diagnóstico.\n\n"
+                    "RESUMO GERAL: 1 falha(s), 0 aviso(s)\n",
                     encoding="utf-8",
                 )
-                GLib.idle_add(self._finish_diagnostic, 1)
+                GLib.idle_add(self._finish_diagnostic, 1, 0)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_diagnostic(self, return_code: int):
+    def _finish_diagnostic(self, failures: int, warnings: int):
         self.diagnostic_running = False
 
         if self.diagnostic_view:
@@ -1245,13 +1562,17 @@ class VPNApplication:
             self.diagnostic_view.get_buffer().set_text(report)
 
         if self.diagnostic_status_label is not None:
-            if return_code == 0:
+            if failures > 0:
                 self.diagnostic_status_label.set_markup(
-                    "<span foreground='#2ca02c'><b>Diagnóstico concluído sem falhas críticas.</b></span>"
+                    "<span foreground='#c0392b'><b>Diagnóstico concluído com falhas críticas.</b></span>"
+                )
+            elif warnings > 0:
+                self.diagnostic_status_label.set_markup(
+                    "<span foreground='#e69f00'><b>Diagnóstico concluído com avisos ou resultado indeterminado.</b></span>"
                 )
             else:
                 self.diagnostic_status_label.set_markup(
-                    "<span foreground='#e69f00'><b>Diagnóstico concluído com avisos ou falhas.</b></span>"
+                    "<span foreground='#2ca02c'><b>Diagnóstico concluído sem falhas ou avisos.</b></span>"
                 )
 
         self.last_diagnostic_at = time.strftime("%H:%M:%S")
@@ -1260,25 +1581,10 @@ class VPNApplication:
                 f"Último diagnóstico: {self.last_diagnostic_at}"
             )
 
-        report_text = (
-            DIAG_PATH.read_text(encoding="utf-8")
-            if DIAG_PATH.exists()
-            else ""
-        )
-        summary_match = re.search(
-            r"RESUMO: (\d+) falha\(s\), (\d+) aviso\(s\)",
-            report_text,
-        )
-        if summary_match:
-            failures, _warnings = summary_match.groups()
-            if int(failures) > 0:
-                self._notify(
-                    f"Diagnóstico encontrou {failures} falha(s). "
-                    "Consulte a aba Diagnóstico."
-                )
-        elif return_code != 0:
+        if failures > 0:
             self._notify(
-                "Falha ao interpretar o resultado do diagnóstico."
+                f"Diagnóstico encontrou {failures} falha(s). "
+                "Consulte a aba Diagnóstico."
             )
         return False
 
@@ -1322,9 +1628,7 @@ class VPNApplication:
             and not self.reconnect_in_progress
             and not self.manual_disconnect
         ):
-            self._start_reconnect(
-                "A VPN Corporativa está desconectada."
-            )
+            self._start_reconnect("A VPN principal está desconectada.")
 
         elif not self.is_connecting:
             self._refresh_controls()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import secrets
+import struct
 import subprocess
 import tempfile
 import time
@@ -27,15 +29,18 @@ class ConnectionTransactionTests(unittest.TestCase):
         self.mode.write_text("normal\n", encoding="utf-8")
         self.processes = self.root / "processes"
         self.ready = self.root / "ready"
+        self.consumed = self.root / "consumed"
         self.lock = self.root / "control.lock"
         self.identity_library = self.root / "vpn-process-identity"
         self.validator = self.root / "validator.py"
         self.launcher = self.root / "launcher"
+        self.canary = secrets.token_hex(24).encode("ascii")
+        self.valid_frame = struct.pack("!I", len(self.canary)) + self.canary
 
         (self.config_dir / "connection.conf").write_text(
             "host = vpn.example\nport = 443\nusername = user\n"
-            "password = secret\nset-routes = 0\nset-dns = 0\n"
-            "trusted-cert = abc\n",
+            "set-routes = 0\nset-dns = 0\n"
+            "trusted-cert = " + "a" * 64 + "\n",
             encoding="utf-8",
         )
         (self.config_dir / "routes.conf").write_text(
@@ -109,7 +114,18 @@ verify_process_identity() {
         openfortivpn = self.bin_dir / "openfortivpn"
         openfortivpn.write_text(
             "#!/bin/bash\n"
-            f"echo $$ >> {self.processes!s}\n"
+            "set -euo pipefail\n"
+            "exec 1>/dev/null 2>/dev/null\n"
+            "[[ $# -eq 2 && $1 == -c && $2 == /proc/self/fd/[0-9]* ]] || exit 64\n"
+            "[[ $(readlink \"$2\") == /memfd:vpn-openfortivpn-config* ]] || exit 65\n"
+            "IFS= read -r expected <&\"$EXPECTED_CANARY_FD\"\n"
+            "config=\"$(<\"$2\")\"\n"
+            "password=\"${config##*$'\\npassword = '}\"\n"
+            "[[ $password == \"$expected\" ]] || exit 66\n"
+            "[[ \"$config\" == *$'\\npassword = '\"$password\" ]] || exit 67\n"
+            "unset expected password config\n"
+            f"printf '%s\\n' \"$$\" >> \"{self.processes!s}\"\n"
+            f"printf '%s\\n' memfd-validado > \"{self.consumed!s}\"\n"
             f"mode=$(< {self.mode!s})\n"
             "if [[ $mode == fail_after ]]; then sleep 0.1; exit 1; fi\n"
             "if [[ $mode == delayed ]]; then sleep 0.3; fi\n"
@@ -119,10 +135,17 @@ verify_process_identity() {
             encoding="utf-8",
         )
         openfortivpn.chmod(0o755)
-        self.launcher.write_text(
-            "#!/usr/bin/env python3\nimport os\nos.execvp('openfortivpn', ['openfortivpn', '-c', '/proc/self/fd/9'])\n",
-            encoding="utf-8",
+        launcher_source = (ROOT / "vpn-openfortivpn.py").read_text(encoding="utf-8")
+        executable_discovery = (
+            '            executable = shutil.which("openfortivpn", '
+            'path="/usr/sbin:/usr/bin:/sbin:/bin")'
         )
+        self.assertEqual(launcher_source.count(executable_discovery), 1)
+        launcher_source = launcher_source.replace(
+            executable_discovery,
+            f"            executable = {str(openfortivpn)!r}",
+        )
+        self.launcher.write_text(launcher_source, encoding="utf-8")
         self.launcher.chmod(0o755)
         ip = self.bin_dir / "ip"
         ip.write_text(
@@ -168,11 +191,44 @@ verify_process_identity() {
         path.write_text(source, encoding="utf-8")
         return path
 
-    def _start_connect(self) -> subprocess.Popen:
-        return subprocess.Popen(
-            ["bash", str(self.connect)], env=self.environment,
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
+    def _start_connect(self, frame: bytes | None = None) -> subprocess.Popen:
+        expected_read, expected_write = os.pipe()
+        os.write(expected_write, self.canary + b"\n")
+        os.close(expected_write)
+        try:
+            process = subprocess.Popen(
+                ["bash", str(self.connect)],
+                env={**self.environment, "EXPECTED_CANARY_FD": str(expected_read)},
+                pass_fds=(expected_read,),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        finally:
+            os.close(expected_read)
+        assert process.stdin is not None
+        process.stdin.write(self.valid_frame if frame is None else frame)
+        process.stdin.close()
+        process.stdin = None
+        return process
+
+    def _assert_configs_have_no_password(self) -> None:
+        paths = [self.config_dir / "connection.conf", self.run_dir / "config" / "connection.conf"]
+        for path in paths:
+            if path.exists():
+                self.assertNotIn(b"password", path.read_bytes(), str(path))
+
+    def _assert_canary_not_persisted(self, *outputs: bytes) -> None:
+        for output in outputs:
+            self.assertNotIn(self.canary, output)
+        for path in self.root.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                content = path.read_bytes()
+            except OSError:
+                continue
+            self.assertNotIn(self.canary, content, str(path))
 
     def _wait_for(self, path: Path, timeout: float = 3) -> None:
         deadline = time.monotonic() + timeout
@@ -191,6 +247,56 @@ verify_process_identity() {
             if value
         ]
 
+    def test_valid_frame_reaches_memfd_consumer_without_persisting_secret(self) -> None:
+        connection = self._start_connect()
+        self._wait_for(self.run_dir / "interface")
+        self._wait_for(self.consumed)
+        self.assertEqual(self.consumed.read_text(encoding="utf-8"), "memfd-validado\n")
+        self._assert_configs_have_no_password()
+        self._assert_canary_not_persisted()
+
+        disconnected = subprocess.run(
+            ["bash", str(self.disconnect)], env=self.environment,
+            capture_output=True, timeout=5, check=False,
+        )
+        stdout, stderr = connection.communicate(timeout=5)
+        self.assertEqual(disconnected.returncode, 0, disconnected.stderr)
+        self.assertEqual(connection.returncode, 0, stderr)
+        for pid in self._managed_pids():
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+        self.assertFalse((self.run_dir / "config").exists())
+        self._assert_configs_have_no_password()
+        self._assert_canary_not_persisted(
+            stdout, stderr, disconnected.stdout, disconnected.stderr,
+        )
+
+    def test_invalid_credential_frames_roll_back_without_starting_consumer(self) -> None:
+        cases = {
+            "stdin vazio": b"",
+            "header truncado": b"\0\0\0",
+            "payload truncado": struct.pack("!I", 4) + b"abc",
+            "tamanho zero": struct.pack("!I", 0),
+            "tamanho acima do limite": struct.pack("!I", 4097),
+            "bytes excedentes": self.valid_frame + b"x",
+            "utf-8 inválido": struct.pack("!I", 1) + b"\xff",
+            "newline": struct.pack("!I", 3) + b"a\nb",
+            "NUL": struct.pack("!I", 3) + b"a\0b",
+        }
+        for name, frame in cases.items():
+            with self.subTest(name=name):
+                connection = self._start_connect(frame)
+                stdout, stderr = connection.communicate(timeout=5)
+                self.assertNotEqual(connection.returncode, 0)
+                self.assertFalse(self.consumed.exists())
+                self.assertEqual(self._managed_pids(), [])
+                self.assertFalse((self.run_dir / "openfortivpn.process").exists())
+                self.assertFalse((self.run_dir / "interface").exists())
+                self.assertFalse((self.run_dir / "route_state.txt").exists())
+                self.assertFalse((self.run_dir / "config").exists())
+                self._assert_configs_have_no_password()
+                self._assert_canary_not_persisted(stdout, stderr)
+
     def test_two_simultaneous_connections_start_only_one_process(self) -> None:
         first = self._start_connect()
         second = self._start_connect()
@@ -203,17 +309,21 @@ verify_process_identity() {
         )
         exited_result = exited.communicate(timeout=3)
         self.assertEqual(exited.returncode, 0, exited_result[1])
-        self.assertIn("já em execução", exited_result[0])
+        self.assertIn("já em execução".encode(), exited_result[0])
         self.assertEqual(len(self._managed_pids()), 1)
         self.assertIsNone(owner.poll())
 
-        subprocess.run(
+        disconnected = subprocess.run(
             ["bash", str(self.disconnect)], env=self.environment,
-            check=True, timeout=5,
+            capture_output=True, check=True, timeout=5,
         )
-        owner.communicate(timeout=5)
+        owner_result = owner.communicate(timeout=5)
         self.assertFalse((self.run_dir / "interface").exists())
         self.assertFalse((self.run_dir / "openfortivpn.process").exists())
+        self._assert_configs_have_no_password()
+        self._assert_canary_not_persisted(
+            *exited_result, *owner_result, disconnected.stdout, disconnected.stderr,
+        )
 
     def test_disconnect_during_initialization_waits_then_rolls_back(self) -> None:
         self.mode.write_text("delayed\n", encoding="utf-8")
@@ -221,34 +331,36 @@ verify_process_identity() {
         self._wait_for(self.processes)
         disconnected = subprocess.run(
             ["bash", str(self.disconnect)], env=self.environment,
-            text=True, capture_output=True, timeout=5, check=False,
+            capture_output=True, timeout=5, check=False,
         )
         self.assertEqual(disconnected.returncode, 0, disconnected.stderr)
-        connection.communicate(timeout=5)
+        connection_result = connection.communicate(timeout=5)
         self.assertFalse((self.run_dir / "interface").exists())
         self.assertFalse((self.run_dir / "openfortivpn.process").exists())
+        self._assert_configs_have_no_password()
+        self._assert_canary_not_persisted(
+            *connection_result, disconnected.stdout, disconnected.stderr,
+        )
 
     def test_failure_before_identity_starts_no_process(self) -> None:
         self.mode.write_text("fail_before\n", encoding="utf-8")
-        result = subprocess.run(
-            ["bash", str(self.connect)], env=self.environment,
-            text=True, capture_output=True, timeout=5, check=False,
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("unbound variable", result.stderr)
+        connection = self._start_connect()
+        stdout, stderr = connection.communicate(timeout=5)
+        self.assertNotEqual(connection.returncode, 0)
+        self.assertNotIn(b"unbound variable", stderr)
         self.assertEqual(self._managed_pids(), [])
         self.assertFalse((self.run_dir / "openfortivpn.process").exists())
         self.assertFalse((self.run_dir / "interface").exists())
         self.assertFalse((self.run_dir / "route_state.txt").exists())
         self.assertFalse((self.run_dir / "config").exists())
+        self._assert_configs_have_no_password()
+        self._assert_canary_not_persisted(stdout, stderr)
 
     def test_failure_after_process_start_terminates_and_removes_attempt(self) -> None:
         self.mode.write_text("fail_after\n", encoding="utf-8")
-        result = subprocess.run(
-            ["bash", str(self.connect)], env=self.environment,
-            text=True, capture_output=True, timeout=5, check=False,
-        )
-        self.assertNotEqual(result.returncode, 0)
+        connection = self._start_connect()
+        stdout, stderr = connection.communicate(timeout=5)
+        self.assertNotEqual(connection.returncode, 0)
         pids = self._managed_pids()
         self.assertEqual(len(pids), 1)
         with self.assertRaises(ProcessLookupError):
@@ -256,6 +368,8 @@ verify_process_identity() {
         self.assertFalse((self.run_dir / "interface").exists())
         self.assertFalse((self.run_dir / "openfortivpn.process").exists())
         self.assertEqual(self.hosts.read_text(encoding="utf-8"), "127.0.0.1 localhost\n")
+        self._assert_configs_have_no_password()
+        self._assert_canary_not_persisted(stdout, stderr)
 
 
 if __name__ == "__main__":

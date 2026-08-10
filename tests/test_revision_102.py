@@ -26,7 +26,11 @@ class Revision102Tests(unittest.TestCase):
         self.assertIn('process.terminate()', app)
         self.assertIn('process.kill()', app)
         self.assertEqual(
-            app.count('GLib.idle_add(self._finish_diagnostic, result.returncode)'),
+            app.count('GLib.idle_add(self._finish_diagnostic, failures, warnings)'),
+            1,
+        )
+        self.assertEqual(
+            app.count('GLib.idle_add(self._finish_diagnostic, 1, 0)'),
             1,
         )
 
@@ -34,14 +38,14 @@ class Revision102Tests(unittest.TestCase):
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn('TARGET_GROUP="$(id -gn "$TARGET_USER")"', installer)
         self.assertNotIn('-g "$TARGET_USER"', installer)
-        self.assertIn('Name=VPN Corporativa', installer)
-        self.assertIn('VPN CORPORATIVA 1.1.2 — PRODUÇÃO', installer)
+        self.assertIn('Name=Rede e VPN', installer)
+        self.assertIn('CENTRO DE CONTROLE DA REDE E VPN 1.1.3 — PRODUÇÃO', installer)
         self.assertEqual(installer.count('Version=1.0'), 2)
 
     def test_application_uses_release_version(self):
         app = (ROOT / "vpn_app/app.py").read_text(encoding="utf-8")
-        self.assertIn('APP_VERSION = "1.1.2"', app)
-        self.assertIn('Gtk.Window(title="Painel VPN Corporativa - Centro de Controle da Rede")', app)
+        self.assertIn('APP_VERSION = "1.1.3"', app)
+        self.assertIn('Gtk.Window(title="Centro de Controle da Rede e VPN")', app)
 
     def test_audit_uses_terminal_only_and_safe_user_fallback(self):
         audit = (ROOT / "auditar_vpn.sh").read_text(encoding="utf-8")
@@ -84,7 +88,10 @@ class Revision102Tests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertIn("entry.set_hexpand(True)", app)
         self.assertIn("url_entry.set_hexpand(True)", app)
-        self.assertIn('Gtk.Button(label="Autenticar VPN secundária")', app)
+        config_start = app.index('secondary_frame = Gtk.Frame(\n            label="VPN secundária"')
+        config_end = app.index("notebook.append_page(secondary_frame", config_start)
+        config_source = app[config_start:config_end]
+        self.assertNotIn('Gtk.Button(label="Autenticar VPN secundária")', config_source)
         self.assertIn(
             "button.set_sensitive(f5_backend.authentication_enabled(f5))",
             app,
@@ -95,8 +102,8 @@ class Revision102Tests(unittest.TestCase):
 
     def test_primary_panel_uses_exact_vpn_titles(self):
         app = (ROOT / "vpn_app/app.py").read_text(encoding="utf-8")
-        self.assertIn('Gtk.Frame(label="VPN principal (OpenFortiVPN)")', app)
-        self.assertIn('Gtk.Frame(label="VPN secundária (BIG-IP/F5)")', app)
+        self.assertIn('Gtk.Frame(label="VPN principal")', app)
+        self.assertIn('Gtk.Frame(label="VPN secundária")', app)
 
     def test_primary_panel_uses_natural_height_and_expected_labels(self):
         app = (ROOT / "vpn_app/app.py").read_text(encoding="utf-8")
@@ -142,14 +149,15 @@ class Revision102Tests(unittest.TestCase):
 
     def test_diagnostic_and_connection_buttons_share_width_pattern(self):
         app = (ROOT / "vpn_app/app.py").read_text(encoding="utf-8")
-        self.assertIn('self._full_width_button(\n            "Executar diagnóstico"', app)
-        self.assertIn('self._full_width_button(\n            "Salvar conexão"', app)
+        self.assertIn('self._full_width_button(\n            "Executar diagnóstico geral"', app)
+        self.assertIn('self._full_width_button(\n            "Salvar configuração da VPN principal"', app)
         self.assertIn("button.set_hexpand(True)", app)
 
-    def test_secondary_diagnostic_summary_uses_ok_label(self):
+    def test_secondary_diagnostic_uses_configured_interface(self):
         diagnostic = (ROOT / "vpn-diagnose").read_text(encoding="utf-8")
-        self.assertIn('STATUS_SECONDARY="OK (tun0)"', diagnostic)
-        self.assertNotIn('STATUS_SECONDARY="ATIVA (tun0)"', diagnostic)
+        self.assertIn('SECONDARY_FILE="$CONFIG_DIR/secondary.conf"', diagnostic)
+        self.assertIn('STATUS_SECONDARY="OK ($SECONDARY_IFACE)"', diagnostic)
+        self.assertNotIn("grep -q '^tun0'", diagnostic)
 
     def test_public_sources_only_contain_approved_external_hosts(self):
         allowed_hosts = {

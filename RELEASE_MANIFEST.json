@@ -1,11 +1,11 @@
 {
   "product": "VPN Corporativa",
-  "version": "1.1.2",
-  "display_version": "1.1.2",
+  "version": "1.1.3",
+  "display_version": "1.1.3",
   "channel": "production",
   "release_artifacts": {
-    "archive": "vpn-corporativa-v1.1.2.zip",
-    "checksum": "vpn-corporativa-v1.1.2.zip.sha256",
+    "archive": "vpn-corporativa-v1.1.3.zip",
+    "checksum": "vpn-corporativa-v1.1.3.zip.sha256",
     "stored_in_repository": false
   },
   "files": [
@@ -25,6 +25,7 @@
     "examples/secondary.conf.example",
     "install.sh",
     "tests/test_config_store.py",
+    "tests/test_certificate_diagnostics.py",
     "tests/test_connection_transaction.py",
     "tests/test_f5_backend.py",
     "tests/test_network.py",
@@ -35,6 +36,7 @@
     "tests/test_revision_106.py",
     "tests/test_revision_107.py",
     "tests/test_uninstall_safety.py",
+    "tests/test_vpn_diagnose.py",
     "uninstall.sh",
     "validate_release.sh",
     "vpn-connect",
@@ -52,6 +54,7 @@
     "vpn.svg",
     "vpn_app/__init__.py",
     "vpn_app/app.py",
+    "vpn_app/certificate_diagnostics.py",
     "vpn_app/config_store.py",
     "vpn_app/f5_backend.py",
     "vpn_app/network.py",

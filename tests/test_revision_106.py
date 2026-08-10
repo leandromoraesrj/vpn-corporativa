@@ -18,7 +18,7 @@ class Revision106Tests(unittest.TestCase):
             "password =   segredo  \n"
             "set-routes = 0\n"
             "set-dns = 0\n"
-            "trusted-cert = abc123\n"
+            "trusted-cert = " + "a" * 64 + "\n"
         )
         self.assertEqual(values["password"], "  segredo  ")
 
@@ -32,7 +32,7 @@ class Revision106Tests(unittest.TestCase):
                 "password =   segredo  \n"
                 "set-routes = 0\n"
                 "set-dns = 0\n"
-                "trusted-cert = abc123\n",
+                "trusted-cert = " + "a" * 64 + "\n",
                 encoding="utf-8",
             )
             with patch.object(config_store, "CONNECTION_FILE", connection):
@@ -48,7 +48,7 @@ class Revision106Tests(unittest.TestCase):
                 "password =    \n"
                 "set-routes = 0\n"
                 "set-dns = 0\n"
-                "trusted-cert = abc123\n"
+                "trusted-cert = " + "a" * 64 + "\n"
             )
 
 

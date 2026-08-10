@@ -5,10 +5,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import importlib.util
 from unittest import mock
 from pathlib import Path
 
-from vpn_app import network
+from vpn_app import app, config_store, network
 from vpn_app.privileged_validation import (
     create_snapshots,
     parse_connection,
@@ -22,6 +23,292 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Revision103Tests(unittest.TestCase):
+    @staticmethod
+    def _application_for_connection_save(password: str):
+        application = object.__new__(app.VPNApplication)
+        application.config_entries = {}
+        for key, value in {
+            "host": "gateway.example",
+            "port": "443",
+            "username": "user",
+            "password": password,
+        }.items():
+            entry = mock.Mock()
+            entry.get_text.return_value = value
+            application.config_entries[key] = entry
+        application.auto_reconnect_check = mock.Mock()
+        application.auto_reconnect_check.get_active.return_value = True
+        application.auto_reconnect_primary = True
+        application.reconnect_status = ""
+        show_message = mock.Mock()
+        application.__dict__["_show_message"] = show_message
+        return application, show_message
+
+    @staticmethod
+    def _stored_connection_values():
+        return {
+            "host": "old-gateway.example",
+            "port": "443",
+            "username": "user",
+            "certificate-policy": "system-ca-with-pinned-fallback",
+            "trusted-cert": "a" * 64,
+        }
+
+    def test_credential_diagnostic_distinguishes_absent_and_unavailable(self):
+        with mock.patch.object(app.secret_store, "lookup_diagnostic", return_value=(None, "ausente", {"attributes": "service=vpn-corporativa, username=user"})):
+            self.assertEqual(app.secret_store.lookup_diagnostic("user")[1], "ausente")
+        with mock.patch.object(app.secret_store, "lookup_diagnostic", return_value=(None, "indisponivel", {"attributes": "service=vpn-corporativa, username=user"})):
+            self.assertEqual(app.secret_store.lookup_diagnostic("user")[1], "indisponivel")
+
+    def test_connection_save_stores_new_password_and_replaces_existing_credential(self):
+        application, _show_message = self._application_for_connection_save("new-secret")
+        credentials = {"user": "old-secret"}
+
+        def replace_credential(username, password):
+            credentials[username] = password
+
+        with mock.patch.object(
+            config_store,
+            "read_key_values",
+            return_value=self._stored_connection_values(),
+        ), mock.patch.object(
+            app.secret_store,
+            "store",
+            side_effect=replace_credential,
+        ) as store, mock.patch.object(
+            app.secret_store,
+            "lookup",
+        ) as lookup, mock.patch.object(
+            config_store,
+            "save_connection",
+        ) as save_connection, mock.patch.object(
+            config_store,
+            "save_auto_reconnect_primary",
+        ):
+            application.save_connection()
+
+        store.assert_called_once_with("user", "new-secret")
+        lookup.assert_not_called()
+        self.assertEqual(credentials["user"], "new-secret")
+        saved_values = save_connection.call_args.args[0]
+        self.assertNotIn("password", saved_values)
+        self.assertEqual(
+            saved_values["certificate-policy"],
+            "system-ca-with-pinned-fallback",
+        )
+        self.assertEqual(saved_values["trusted-cert"], "a" * 64)
+
+    def test_connection_save_empty_password_preserves_existing_credential(self):
+        application, _show_message = self._application_for_connection_save("")
+        with mock.patch.object(
+            config_store,
+            "read_key_values",
+            return_value=self._stored_connection_values(),
+        ), mock.patch.object(
+            app.secret_store,
+            "store",
+        ) as store, mock.patch.object(
+            app.secret_store,
+            "lookup",
+            return_value="existing-secret",
+        ) as lookup, mock.patch.object(
+            config_store,
+            "save_connection",
+        ) as save_connection, mock.patch.object(
+            config_store,
+            "save_auto_reconnect_primary",
+        ):
+            application.save_connection()
+
+        lookup.assert_called_once_with("user")
+        store.assert_not_called()
+        save_connection.assert_called_once()
+
+    def test_connection_save_updates_reconnect_preference_in_memory_and_file(self):
+        application, _show_message = self._application_for_connection_save("")
+        application.auto_reconnect_check.get_active.return_value = False
+
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary)
+            with mock.patch.object(
+                config_store,
+                "CONFIG_DIR",
+                config_dir,
+            ), mock.patch.object(
+                config_store,
+                "PREFERENCES_FILE",
+                config_dir / "preferences.conf",
+            ), mock.patch.object(
+                config_store,
+                "read_key_values",
+                return_value=self._stored_connection_values(),
+            ), mock.patch.object(
+                app.secret_store,
+                "lookup",
+                return_value="existing-secret",
+            ), mock.patch.object(
+                config_store,
+                "save_connection",
+            ):
+                application.save_connection()
+
+                self.assertFalse(application.auto_reconnect_primary)
+                self.assertFalse(config_store.read_auto_reconnect_primary())
+                self.assertEqual(
+                    config_store.PREFERENCES_FILE.stat().st_mode & 0o777,
+                    0o600,
+                )
+
+    def test_connection_save_empty_password_without_credential_is_blocked(self):
+        application, show_message = self._application_for_connection_save("")
+        with mock.patch.object(
+            config_store,
+            "read_key_values",
+            return_value=self._stored_connection_values(),
+        ), mock.patch.object(
+            app.secret_store,
+            "lookup",
+            return_value=None,
+        ), mock.patch.object(
+            config_store,
+            "save_connection",
+        ) as save_connection, mock.patch.object(
+            config_store,
+            "save_auto_reconnect_primary",
+        ) as save_preference:
+            application.save_connection()
+
+        save_connection.assert_not_called()
+        save_preference.assert_not_called()
+        show_message.assert_called_once_with(
+            "Não foi possível salvar a conexão",
+            "Informe a senha da VPN para armazená-la no GNOME Keyring.",
+            error=True,
+        )
+
+    def test_connection_save_keyring_failure_does_not_save_or_expose_password(self):
+        password = "secret-that-must-not-leak"
+        application, show_message = self._application_for_connection_save(password)
+        with mock.patch.object(
+            config_store,
+            "read_key_values",
+            return_value=self._stored_connection_values(),
+        ), mock.patch.object(
+            app.secret_store,
+            "store",
+            side_effect=RuntimeError(password),
+        ), mock.patch.object(
+            config_store,
+            "save_connection",
+        ) as save_connection, mock.patch.object(
+            config_store,
+            "save_auto_reconnect_primary",
+        ) as save_preference:
+            application.save_connection()
+
+        save_connection.assert_not_called()
+        save_preference.assert_not_called()
+        rendered_message = repr(show_message.call_args)
+        self.assertNotIn(password, rendered_message)
+        self.assertIn("GNOME Keyring", rendered_message)
+
+    def test_connection_save_keyring_lookup_failure_does_not_update_configuration(self):
+        sensitive_detail = "keyring-sensitive-detail"
+        application, show_message = self._application_for_connection_save("")
+        with mock.patch.object(
+            config_store,
+            "read_key_values",
+            return_value=self._stored_connection_values(),
+        ), mock.patch.object(
+            app.secret_store,
+            "lookup",
+            side_effect=RuntimeError(sensitive_detail),
+        ), mock.patch.object(
+            config_store,
+            "save_connection",
+        ) as save_connection, mock.patch.object(
+            config_store,
+            "save_auto_reconnect_primary",
+        ) as save_preference:
+            application.save_connection()
+
+        save_connection.assert_not_called()
+        save_preference.assert_not_called()
+        rendered_message = repr(show_message.call_args)
+        self.assertNotIn(sensitive_detail, rendered_message)
+        self.assertIn("GNOME Keyring", rendered_message)
+
+    def test_missing_connection_configuration_has_clear_message(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "connection.conf"
+            with mock.patch.object(config_store, "CONNECTION_FILE", missing):
+                with self.assertRaises(RuntimeError) as raised:
+                    app.VPNApplication._credential_frame()
+            self.assertIn(
+                "Restaure uma configuração autorizada ou reexecute o instalador "
+                "para reprovisionar a VPN principal.",
+                str(raised.exception),
+            )
+            self.assertNotIn("Salve a conexão na aba Configuração", str(raised.exception))
+
+    def test_configured_username_looks_up_keyring_without_password_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            connection = Path(temporary) / "connection.conf"
+            connection.write_text(
+                "host = gateway.example\nport = 443\nusername = user\n"
+                "set-routes = 0\nset-dns = 0\ntrusted-cert = " + "a" * 64 + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(config_store, "CONNECTION_FILE", connection), mock.patch.object(
+                app.secret_store,
+                "lookup_diagnostic",
+                return_value=("secret", "encontrada", {"attributes": "service=vpn-corporativa, username=user"}),
+            ) as lookup:
+                frame = app.VPNApplication._credential_frame()
+            lookup.assert_called_once_with("user")
+            self.assertNotIn(b"secret", connection.read_bytes())
+            self.assertEqual(frame[0:4], (6).to_bytes(4, "big"))
+    def test_launcher_translates_certificate_policies_without_leaking_internal_directive(self):
+        spec = importlib.util.spec_from_file_location(
+            "vpn_openfortivpn", ROOT / "vpn-openfortivpn.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "connection.conf"
+            fingerprint = "a" * 64
+            path.write_text(
+                "host = vpn.example\nport = 443\nusername = user\n"
+                "set-routes = 0\nset-dns = 0\n"
+                f"certificate-policy = system-ca\n",
+                encoding="utf-8",
+            )
+            system_ca = module.config_with_password(path, "secret")
+            self.assertNotIn(b"certificate-policy", system_ca)
+            self.assertNotIn(b"trusted-cert", system_ca)
+
+            path.write_text(
+                "host = vpn.example\nport = 443\nusername = user\n"
+                "set-routes = 0\nset-dns = 0\n"
+                f"trusted-cert = {fingerprint}\n",
+                encoding="utf-8",
+            )
+            legacy = module.config_with_password(path, "secret")
+            self.assertIn(f"trusted-cert = {fingerprint}".encode(), legacy)
+            self.assertNotIn(b"certificate-policy", legacy)
+
+            path.write_text(
+                "host = vpn.example\nport = 443\nusername = user\n"
+                "set-routes = 0\nset-dns = 0\n"
+                "certificate-policy = system-ca-with-pinned-fallback\n"
+                f"trusted-cert = {fingerprint}\n",
+                encoding="utf-8",
+            )
+            fallback = module.config_with_password(path, "secret")
+            self.assertIn(f"trusted-cert = {fingerprint}".encode(), fallback)
+            self.assertNotIn(b"certificate-policy", fallback)
+
     def test_installer_does_not_pass_password_in_python_arguments(self):
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertNotIn(
@@ -46,6 +333,7 @@ class Revision103Tests(unittest.TestCase):
         self.assertIn("F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL", launcher)
         self.assertNotIn("except OSError:\n                pass", launcher)
         self.assertIn("/usr/bin/python3 -I -E", connect)
+        self.assertIn('"$ROOT_CONF" <&0 &', connect)
         self.assertIn("clear_keyring_credential", uninstall)
         self.assertIn("Remover a credencial do GNOME Keyring?", uninstall)
         identity = (ROOT / "vpn-process-identity").read_text(encoding="utf-8")
@@ -59,7 +347,7 @@ class Revision103Tests(unittest.TestCase):
         connection.write_text(
             "host = vpn.example\nport = 0443\nusername = user\n"
             "password = secret\nset-routes = 0\nset-dns = 0\n"
-            "trusted-cert = abc\n",
+            "trusted-cert = " + "a" * 64 + "\n",
             encoding="utf-8",
         )
         routes.write_text("198.51.100.8/24\n198.51.100.0/24\n", encoding="utf-8")
@@ -348,7 +636,7 @@ compgen -G "${5}.tmp.*" >/dev/null && exit 1
                 "password = secret\n"
                 "set-routes = 0\n"
                 "set-dns = 0\n"
-                "trusted-cert = abc\n"
+                "trusted-cert = " + "a" * 64 + "\n"
                 "pppd-use-peerdns = 1\n",
                 encoding="utf-8",
             )
@@ -368,7 +656,7 @@ compgen -G "${5}.tmp.*" >/dev/null && exit 1
                 "password = secret\n"
                 "set-routes = 0\n"
                 "set-dns = 0\n"
-                "trusted-cert = abc\n",
+                "trusted-cert = " + "a" * 64 + "\n",
                 encoding="utf-8",
             )
             routes.write_text("192.0.2.0/24\n", encoding="utf-8")

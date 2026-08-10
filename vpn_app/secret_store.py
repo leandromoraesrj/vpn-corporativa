@@ -22,11 +22,29 @@ def _attributes(username: str) -> dict[str, str]:
     return {"service": SERVICE, "username": username}
 
 
-def lookup(username: str) -> str | None:
+def lookup_diagnostic(username: str) -> tuple[str | None, str, dict[str, str]]:
+    """Look up the item and return only a safe status plus non-secret attributes."""
+    attributes = _attributes(username)
     try:
-        return Secret.password_lookup_sync(SCHEMA, _attributes(username), None)
+        value = Secret.password_lookup_sync(SCHEMA, attributes, None)
     except Exception:
-        raise RuntimeError("Não foi possível acessar o GNOME Keyring.") from None
+        return None, "indisponivel", {"attributes": ", ".join(
+            f"{key}={value}" for key, value in attributes.items()
+        )}
+    if value is None:
+        return None, "ausente", {"attributes": ", ".join(
+            f"{key}={value}" for key, value in attributes.items()
+        )}
+    return value, "encontrada", {"attributes": ", ".join(
+        f"{key}={value}" for key, value in attributes.items()
+    )}
+
+
+def lookup(username: str) -> str | None:
+    value, status, _details = lookup_diagnostic(username)
+    if status == "indisponivel":
+        raise RuntimeError("Não foi possível acessar o GNOME Keyring.")
+    return value
 
 
 def store(username: str, password: str) -> None:

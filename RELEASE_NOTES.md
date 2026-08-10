@@ -1,23 +1,58 @@
-# VPN Corporativa 1.1.2 — Correções da bandeja e janela F5
+# Centro de Controle da Rede e VPN 1.1.3 — Segurança, diagnóstico e configuração
 
-Esta versão corrige a sincronização da bandeja e dos controles da janela F5,
-preservando os fluxos de conexão, desconexão e reconexão automática.
+Esta versão consolida a proteção da credencial, as políticas TLS, o diagnóstico
+e a configuração da VPN secundária, além de atualizar a identidade visual e os
+controles operacionais.
 
-## Alterações da versão 1.1.2
+## Alterações da versão 1.1.3
 
-- detecção da visibilidade da janela F5 pelo estado real do gerenciador de
-  janelas;
-- remoção explícita do estado minimizado ao exibir a janela;
-- botões **Ocultar F5** e **Exibir F5** alternados conforme o estado real;
-- status do menu identificados como **VPN Principal** e **VPN Secundária**;
-- correção da limpeza dos ícones divididos no uninstall;
-- manifesto e documentação sincronizados com o pacote publicado.
+- identidade visual renomeada para **Centro de Controle da Rede e VPN**, com a
+  terminologia genérica **VPN secundária** nos controles atuais;
+- detecção da visibilidade da janela secundária pelo estado real do gerenciador
+  de janelas, remoção do estado minimizado ao exibi-la e sincronização dos
+  botões e do menu;
+- status do menu identificados como **VPN Principal** e **VPN Secundária** e
+  correção da limpeza dos ícones divididos no uninstall;
+- senha da VPN principal armazenada no GNOME Keyring via Secret Service, fora do
+  `connection.conf` gerado e dos snapshots privilegiados;
+- credencial enviada em frame delimitado pela entrada padrão ao helper, que cria
+  a configuração transitória do `openfortivpn` em `memfd` selado;
+- a aplicação não persiste nem exibe a credencial em seus logs ou relatórios;
+- configuração salva revalidada pelo mesmo parser estrutural usado pelo helper
+  privilegiado, com rejeição de diretivas duplicadas, desconhecidas ou fixas em
+  valores inseguros;
+- políticas `legacy-pinned`, `system-ca` e
+  `system-ca-with-pinned-fallback`, com requisitos explícitos para
+  `trusted-cert` e sem aceitação automática de certificado;
+- diagnóstico TLS integrado ao diagnóstico geral, com resultados separados para
+  cadeia CA, hostname/SAN, validade e correspondência do fingerprint, sem
+  instalar CA, alterar confiança ou implementar TOFU;
+- perfil confirmado do `openfortivpn 1.21.0` reproduzido sem SNI, por IPv4 e com
+  `X509_check_host` sobre o certificado da mesma observação; versões sem perfil
+  comprovado produzem aviso indeterminado e nunca um falso resultado `OK`;
+- interface da VPN secundária configurável: `tun0` é fallback somente quando a
+  diretiva está ausente, valor vazio mantém o modo manual e um nome preenchido é
+  usado exatamente como salvo;
+- descoberta manual que lista candidatas sem confundi-las com a interface salva,
+  sem seleção implícita e com confirmação antes de persistir uma escolha;
+- reconexão automática da VPN principal configurável e cancelável, sem conexão
+  automática no autostart e sem reconexão da VPN secundária, com revalidação do
+  cancelamento após cada backoff e antes de iniciar o helper privilegiado;
+- `vpn-diagnose` alinhado à interface secundária configurada, com outros túneis
+  apresentados somente como informação e estado `OK` restrito a interfaces
+  `tun`/`tap`/`ppp` ativas, com IPv4 válido e sem conflito com a VPN principal;
+- **Sair** encerra a interface gráfica e preserva os túneis ativos;
+- correções de estado, foco, visibilidade, controles e atualização do painel e
+  da bandeja;
+- manifesto, documentação e suíte de testes sincronizados com os arquivos e as
+  regras de validação atuais.
 
 ## Alterações consolidadas da versão 1.1.1
 
 - senha da VPN principal armazenada no GNOME Keyring via Secret Service;
 - configuração transitória do `openfortivpn` criada em `memfd` selado;
-- snapshots, argumentos, ambiente e logs sem a credencial;
+- a aplicação não persiste nem exibe a credencial em arquivos, snapshots ou
+  seus próprios logs e relatórios;
 - migração legada e remoção opcional do segredo no uninstall.
 - ícone da bandeja dividido entre as duas VPNs, com menu sincronizado
   aos controles do painel.
@@ -38,9 +73,9 @@ preservando os fluxos de conexão, desconexão e reconexão automática.
   documentados.
 
 Não há declaração de compatibilidade universal com Linux. O cliente BIG-IP/F5
-e um navegador padrão para autenticação web são requisitos externos. **Ocultar
-F5** e **Exibir F5** dependem de `wmctrl` e `xdotool` e podem não funcionar
-corretamente em Wayland.
+e um navegador padrão para autenticação web são requisitos externos. **Ocultar F5**
+e **Exibir F5** dependem de `wmctrl` e `xdotool` e podem não funcionar corretamente
+em Wayland.
 
 ## Correções consolidadas
 
@@ -77,6 +112,7 @@ A validação manual registrada em `VALIDATION.md` confirmou:
 - coexistência com a VPN secundária, Tailscale e Docker;
 - reconexão após queda;
 - diagnóstico completo.
+
 ## Revisão de segurança
 
 - senha da configuração inicial transmitida ao validador pela entrada
@@ -99,13 +135,17 @@ A validação manual registrada em `VALIDATION.md` confirmou:
 - incluído teste específico para aliases internos com `_`.
 
 
-## Revisão de encerramento
+## Histórico da revisão de encerramento
 
-- a opção **Sair** agora executa `vpn-disconnect` antes de encerrar o GTK;
-- o estado de reconexão automática é desativado antes da desconexão;
-- a aplicação aguarda até 20 segundos pelo helper;
-- fechar apenas a janela continua ocultando o aplicativo e mantém a VPN,
-  enquanto **Sair** encerra a VPN e o programa.
+- naquela revisão, a opção **Sair** passou a executar `vpn-disconnect` antes de
+  encerrar o GTK;
+- o estado de reconexão automática era desativado antes da desconexão;
+- a aplicação aguardava até 20 segundos pelo helper;
+- fechar apenas a janela ocultava o aplicativo e mantinha a VPN, enquanto
+  **Sair** encerrava a VPN e o programa.
+
+Na versão 1.1.2, esse comportamento histórico foi substituído: **Sair** encerra
+a interface gráfica e preserva os túneis ativos.
 
 ## Revisão de credenciais
 

@@ -198,7 +198,12 @@ readonly OPENFORTIVPN_EXE="$(readlink -f "$(command -v openfortivpn)")"
     log_status "ERRO" "Launcher seguro do openfortivpn ausente."
     exit 1
 }
-/usr/bin/python3 -I -E "$OPENFORTIVPN_LAUNCHER" --config "$ROOT_CONF" < <(cat) &
+# Preserve the helper's credential stdin directly.  A process-substitution
+# `cat` would inherit the caller's terminal/pipes and could keep communicate()
+# blocked after the managed process exits.
+# Explicitly duplicate the helper's stdin. Bash may otherwise connect stdin
+# of an asynchronous command to /dev/null, losing the transient credential frame.
+/usr/bin/python3 -I -E "$OPENFORTIVPN_LAUNCHER" --config "$ROOT_CONF" <&0 &
 VPN_PID=$!
 if ! VPN_STARTTIME="$(process_starttime "$VPN_PID")"; then
     kill -TERM "$VPN_PID" 2>/dev/null || true

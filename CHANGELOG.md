@@ -1,12 +1,51 @@
 # Changelog
 
+## 1.1.3 — 2026-08-09
+
+- Reforçada a proteção da credencial da VPN principal com GNOME Keyring,
+  transporte enquadrado pela entrada padrão e configuração transitória em
+  `memfd` selado.
+- Tornadas explícitas as políticas de certificado e integrado ao diagnóstico
+  geral um relatório TLS correlacionado, sem alteração automática de confiança.
+- Alinhado o perfil TLS confirmado do `openfortivpn 1.21.0`, sem SNI e com
+  validação de hostname por `X509_check_host`; versões sem perfil comprovado
+  permanecem como resultado indeterminado.
+- Tornada configurável a interface da VPN secundária, com fallback `tun0`
+  somente quando a diretiva está ausente, modo manual explícito e descoberta
+  assistida sem seleção automática.
+- Alinhado o `vpn-diagnose` ao estado operacional da aplicação, exigindo
+  interface configurada ativa, tipo de túnel compatível, IPv4 válido e ausência
+  de conflito com a VPN principal.
+- Tornada configurável e cancelável a reconexão automática da VPN principal,
+  inclusive quando a desconexão manual ocorre durante o backoff.
+- Corrigidos estados, ações, foco, visibilidade e atualização da interface e da
+  bandeja sem alterar o autostart desconectado.
+- Unificada a validação estrutural usada pelo diagnóstico e pelo helper
+  privilegiado para rejeitar diretivas duplicadas, desconhecidas ou inseguras.
+- Ampliadas as validações automatizadas de credencial, TLS, concorrência,
+  interface secundária, diagnóstico, instalação e remoção.
+
 ## 1.1.2 — 2026-08-07
 
-- corrigida a detecção da visibilidade e a alternância dos controles da janela F5;
-- corrigida a atualização do menu e dos botões após exibir ou ocultar a janela;
-- status da bandeja identificados como VPN Principal e VPN Secundária;
-- corrigida a remoção dos ícones divididos no uninstall;
-- manifesto, documentação e testes sincronizados com a versão publicada.
+- Renomeada a interface visual para **Centro de Controle da Rede e VPN** e
+  padronizada a terminologia visível da VPN secundária.
+- Corrigidas a detecção de visibilidade, a alternância dos controles da janela
+  secundária, a atualização da bandeja e a remoção dos ícones divididos.
+- Consolidado o uso do GNOME Keyring, com senha fora do `connection.conf`
+  gerado e dos snapshots privilegiados, frame pela entrada padrão e configuração
+  transitória em `memfd` selado.
+- Adicionadas políticas TLS explícitas e diagnóstico de certificado integrado ao
+  diagnóstico geral, sem confiança automática.
+- Adicionada configuração da interface secundária com fallback `tun0` somente
+  quando a diretiva está ausente, modo manual vazio e seleção explícita entre
+  candidatas de descoberta.
+- Tornada configurável a reconexão automática da VPN principal, incluindo o
+  cancelamento de tentativas, sem alterar o autostart desconectado.
+- Atualizado o `vpn-diagnose` para usar a interface secundária configurada e
+  tratar outros túneis somente como informação.
+- Alterado **Sair** para encerrar a interface gráfica preservando os túneis
+  ativos.
+- Manifesto, documentação e testes sincronizados com os arquivos atuais.
 
 ## 1.1.1 — 2026-08-07
 
@@ -17,8 +56,8 @@
 ## 1.1.0 — 2026-08-07
 
 - Protegida a credencial da VPN principal com GNOME Keyring/Secret Service.
-- Configuração do `openfortivpn` criada em `memfd` selado, sem senha em arquivos,
-  snapshots, argumentos, ambiente ou logs.
+- Configuração do `openfortivpn` criada em `memfd` selado; a aplicação deixou de
+  persistir ou exibir a senha em seus arquivos, snapshots, logs e relatórios.
 - Migração legada, reconexão automática, auditoria, uninstall e testes de
   segurança atualizados.
 

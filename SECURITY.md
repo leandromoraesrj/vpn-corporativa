@@ -16,5 +16,5 @@ arquivo `connection.conf`, os snapshots em `/run/vpn` e os argumentos do
 
 ## Escopo
 
-A versão mantida atualmente é a `1.1.2`. Correções de segurança serão documentadas
+A versão mantida atualmente é a `1.1.3`. Correções de segurança serão documentadas
 nas notas da versão correspondente.

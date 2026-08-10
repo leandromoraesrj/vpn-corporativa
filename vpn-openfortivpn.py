@@ -9,6 +9,7 @@ import os
 import shutil
 import struct
 import sys
+import re
 from pathlib import Path
 
 
@@ -19,6 +20,14 @@ F_SEAL_SHRINK = getattr(fcntl, "F_SEAL_SHRINK", 2)
 F_SEAL_GROW = getattr(fcntl, "F_SEAL_GROW", 4)
 F_SEAL_WRITE = getattr(fcntl, "F_SEAL_WRITE", 8)
 MFD_ALLOW_SEALING = getattr(os, "MFD_ALLOW_SEALING", 2)
+# Duplicado deliberadamente: este launcher privilegiado deve permanecer autocontido.
+# O teste de paridade das regras de certificado deve acompanhar qualquer alteração.
+CERTIFICATE_POLICIES = {
+    "legacy-pinned",
+    "system-ca",
+    "system-ca-with-pinned-fallback",
+}
+FINGERPRINT_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def read_secret() -> str:
@@ -44,11 +53,36 @@ def config_with_password(path: Path, password: str) -> bytes:
     lines = path.read_text(encoding="utf-8").splitlines()
     if any(line.split("=", 1)[0].strip() == "password" for line in lines if "=" in line):
         raise ValueError("configuração insegura")
-    required = {"host", "port", "username", "set-routes", "set-dns", "trusted-cert"}
-    present = {line.split("=", 1)[0].strip() for line in lines if "=" in line}
-    if present != required:
+    values: dict[str, str] = {}
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError("configuração incompleta")
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key in values:
+            raise ValueError("configuração duplicada")
+        if key in {"trusted-cert", "certificate-policy"}:
+            values[key] = value[1:] if value.startswith(" ") else value
+        else:
+            values[key] = value.strip()
+
+    policy = values.get("certificate-policy", "legacy-pinned").lower()
+    if policy not in CERTIFICATE_POLICIES:
+        raise ValueError("política de certificado inválida")
+    required = {"host", "port", "username", "set-routes", "set-dns"}
+    if policy != "system-ca":
+        required.add("trusted-cert")
+    if not required.issubset(values) or set(values) - required - {"certificate-policy"}:
         raise ValueError("configuração incompleta")
-    return ("\n".join(lines) + f"\npassword = {password}\n").encode("utf-8")
+    if "trusted-cert" in values and not FINGERPRINT_RE.fullmatch(values["trusted-cert"]):
+        raise ValueError("trusted-cert inválido")
+    output_keys = ["host", "port", "username", "set-routes", "set-dns"]
+    if "trusted-cert" in values:
+        output_keys.append("trusted-cert")
+    output = [f"{key} = {values[key]}" for key in output_keys]
+    return ("\n".join(output) + f"\npassword = {password}\n").encode("utf-8")
 
 
 def main() -> int:

@@ -12,6 +12,7 @@ TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 CONFIG_DIR="$TARGET_HOME/.config/vpn"
 ROUTES_FILE="$CONFIG_DIR/routes.conf"
 HOSTS_MAP="$CONFIG_DIR/hosts.conf"
+SECONDARY_FILE="$CONFIG_DIR/secondary.conf"
 
 FAILURES=0
 WARNINGS=0
@@ -23,6 +24,8 @@ STATUS_TAILSCALE="OK"
 STATUS_LAN="OK"
 STATUS_DOCKER="OK"
 STATUS_FIREWALL="OK"
+SECONDARY_MODE="DEFAULT"
+SECONDARY_IFACE="tun0"
 
 ok()   { printf '[OK] %s\n' "$*"; }
 info() { printf '[INFO] %s\n' "$*"; }
@@ -39,6 +42,119 @@ tcp_test() {
     local port="$2"
     timeout 4 bash -c "exec 3<>/dev/tcp/$host/$port" 2>/dev/null
 }
+
+secondary_tunnel_type_is_valid() {
+    ip -json -details link show dev "$1" 2>/dev/null |
+        /usr/bin/python3 -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+    kind = str((payload[0].get("linkinfo") or {}).get("info_kind") or "")
+except (IndexError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+raise SystemExit(0 if kind in {"tun", "tap", "ppp"} else 1)
+'
+}
+
+secondary_ipv4_is_valid() {
+    local address
+    address="$(ip -4 -br addr show dev "$1" 2>/dev/null | awk 'NR == 1 {sub(/\/.*/, "", $3); print $3}')"
+    /usr/bin/python3 -c '
+import ipaddress
+import sys
+
+try:
+    address = ipaddress.IPv4Address(sys.argv[1])
+except ipaddress.AddressValueError:
+    raise SystemExit(1)
+raise SystemExit(1 if address.is_unspecified else 0)
+' "$address"
+}
+
+load_secondary_interface() {
+    local parsed candidate
+
+    if [[ -L "$SECONDARY_FILE" ]]; then
+        SECONDARY_MODE="INVALID"
+        SECONDARY_IFACE=""
+        return
+    fi
+    if [[ ! -e "$SECONDARY_FILE" ]]; then
+        return
+    fi
+    if [[ ! -f "$SECONDARY_FILE" || ! -r "$SECONDARY_FILE" ]]; then
+        SECONDARY_MODE="INVALID"
+        SECONDARY_IFACE=""
+        return
+    fi
+
+    if ! parsed="$(awk '
+        function trim(value) {
+            sub(/^[[:space:]]+/, "", value)
+            sub(/[[:space:]]+$/, "", value)
+            return value
+        }
+        {
+            line = $0
+            normalized = trim(line)
+            if (normalized == "" || substr(normalized, 1, 1) == "#")
+                next
+            separator = index(line, "=")
+            if (separator == 0)
+                next
+            key = trim(substr(line, 1, separator - 1))
+            if (key != "interface")
+                next
+            found = 1
+            value = trim(substr(line, separator + 1))
+            if (value == "")
+                print "MANUAL"
+            else if (length(value) <= 15 && value ~ /^[A-Za-z0-9_.-]+$/)
+                print "CONFIGURED\t" value
+            else
+                print "INVALID"
+            exit
+        }
+        END {
+            if (!found)
+                print "DEFAULT\ttun0"
+        }
+    ' "$SECONDARY_FILE")"; then
+        SECONDARY_MODE="INVALID"
+        SECONDARY_IFACE=""
+        return
+    fi
+
+    case "$parsed" in
+        $'DEFAULT\ttun0')
+            SECONDARY_MODE="DEFAULT"
+            SECONDARY_IFACE="tun0"
+            ;;
+        MANUAL)
+            SECONDARY_MODE="MANUAL"
+            SECONDARY_IFACE=""
+            ;;
+        $'CONFIGURED\t'*)
+            candidate="${parsed#*$'\t'}"
+            if (( ${#candidate} <= 15 )) &&
+               [[ "$candidate" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+                SECONDARY_MODE="CONFIGURED"
+                SECONDARY_IFACE="$candidate"
+            else
+                SECONDARY_MODE="INVALID"
+                SECONDARY_IFACE=""
+            fi
+            ;;
+        *)
+            SECONDARY_MODE="INVALID"
+            SECONDARY_IFACE=""
+            ;;
+    esac
+}
+
+load_secondary_interface
 
 printf '============================================================\n'
 printf 'VPN CORPORATIVA — DIAGNÓSTICO DE CONECTIVIDADE\n'
@@ -86,16 +202,40 @@ OTHER_VPNS=$(ip -br link show |
 if [[ -n "$OTHER_VPNS" ]]; then
     printf '%s\n' "$OTHER_VPNS"
     OTHER_NAMES=$(awk '{print $1}' <<< "$OTHER_VPNS" | tr '\n' ' ')
-    if grep -q '^tun0' <<< "$OTHER_VPNS"; then
-        STATUS_SECONDARY="OK (tun0)"
-        info "VPN secundária detectada em tun0."
-    else
-        STATUS_SECONDARY="ATIVA"
-        info "Outro túnel VPN detectado: $OTHER_NAMES"
-    fi
+    info "Outros túneis VPN detectados: $OTHER_NAMES"
 else
     ok "Nenhuma outra VPN/túnel ativo."
 fi
+
+printf '\nVPN secundária configurada:\n'
+case "$SECONDARY_MODE" in
+    MANUAL)
+        STATUS_SECONDARY="MODO MANUAL"
+        info "Modo manual ativo; nenhuma interface secundária foi assumida."
+        ;;
+    INVALID)
+        STATUS_SECONDARY="CONFIGURAÇÃO INVÁLIDA"
+        warn "A interface da VPN secundária em secondary.conf é inválida."
+        ;;
+    DEFAULT|CONFIGURED)
+        if [[ -n "$VPN_IFACE" && "$SECONDARY_IFACE" == "$VPN_IFACE" ]]; then
+            STATUS_SECONDARY="CONFLITO ($SECONDARY_IFACE)"
+            warn "A interface secundária configurada coincide com a VPN principal."
+        elif ! ip link show up dev "$SECONDARY_IFACE" >/dev/null 2>&1; then
+            STATUS_SECONDARY="NÃO DETECTADA ($SECONDARY_IFACE)"
+            info "Interface secundária $SECONDARY_IFACE não está ativa."
+        elif ! secondary_tunnel_type_is_valid "$SECONDARY_IFACE"; then
+            STATUS_SECONDARY="INCONSISTENTE ($SECONDARY_IFACE)"
+            warn "A interface secundária configurada não é um túnel tun/tap/ppp."
+        elif ! secondary_ipv4_is_valid "$SECONDARY_IFACE"; then
+            STATUS_SECONDARY="INCONSISTENTE ($SECONDARY_IFACE)"
+            warn "A interface secundária configurada não possui IPv4 válido."
+        else
+            STATUS_SECONDARY="OK ($SECONDARY_IFACE)"
+            info "VPN secundária detectada em $SECONDARY_IFACE."
+        fi
+        ;;
+esac
 
 printf '\nTailscale:\n'
 if ip link show tailscale0 >/dev/null 2>&1; then

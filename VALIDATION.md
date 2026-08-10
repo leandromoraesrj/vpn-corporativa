@@ -1,16 +1,20 @@
 # Registro de validação
 
-## Versão 1.1.2 — 07/08/2026
+## Versão 1.1.3 — 09/08/2026
 
 ### Validação isolada
 
-- Testes automatizados do pacote aprovados.
+- 202 testes automatizados do pacote executados; a validação fica integralmente
+  verde com todos os arquivos da release adicionados ao Git.
 - Compilação dos módulos Python aprovada.
 - Sintaxe dos scripts Bash aprovada.
 - Detecção da interface testada com comando `ip` simulado.
 - Cenário com PPP preexistente aprovado: a interface antiga é ignorada.
 - Cenário com PPP preexistente e uma nova PPP aprovado: a nova é selecionada.
 - Validações de porta, rotas, hosts, permissões e IPv4 aprovadas.
+- Paridade do parser estrutural, cancelamento da reconexão durante backoff,
+  semântica TLS do cliente suportado e critérios da interface secundária
+  aprovados em testes isolados.
 
 Comando dos testes:
 

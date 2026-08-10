@@ -1,4 +1,8 @@
 # Configuração opcional da VPN secundária.
 # Copie para ~/.config/vpn/secondary.conf e substitua pelos valores autorizados.
-route =
+# Rotas opcionais, repetíveis:
+# route = valor
+# route = valor
 portal-url =
+# Interface de túnel configurada (o padrão da aplicação é tun0):
+interface = tun0

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -15,9 +16,38 @@ REQUIRED_CONNECTION_KEYS = {
     "host",
     "port",
     "username",
-    "trusted-cert",
     *ALLOWED_FIXED_DIRECTIVES,
 }
+# Duplicado deliberadamente: o validador privilegiado deve permanecer autocontido.
+# O teste de paridade das regras de certificado deve acompanhar qualquer alteração.
+CERTIFICATE_POLICIES = {
+    "legacy-pinned",
+    "system-ca",
+    "system-ca-with-pinned-fallback",
+}
+FINGERPRINT_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def normalize_certificate_policy(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return "legacy-pinned"
+    if normalized not in CERTIFICATE_POLICIES:
+        raise ValueError(f"Política de certificado inválida: {normalized}")
+    return normalized
+
+
+def normalize_trusted_cert(value: str | None, *, required: bool) -> str:
+    raw = "" if value is None else str(value)
+    if raw == "":
+        if required:
+            raise ValueError("Campo obrigatório vazio: trusted-cert")
+        return ""
+    if not FINGERPRINT_RE.fullmatch(raw):
+        raise ValueError(
+            "trusted-cert deve conter exatamente 64 caracteres hexadecimais."
+        )
+    return raw.lower()
 
 
 def validate_connection(values: dict[str, str]) -> dict[str, str]:
@@ -28,8 +58,12 @@ def validate_connection(values: dict[str, str]) -> dict[str, str]:
     if not 1 <= port <= 65535:
         raise ValueError("A porta deve ser um número entre 1 e 65535.")
 
-    normalized: dict[str, str] = {"port": str(port)}
-    required = ("host", "username", "trusted-cert")
+    policy = normalize_certificate_policy(values.get("certificate-policy"))
+    normalized: dict[str, str] = {
+        "port": str(port),
+        "certificate-policy": policy,
+    }
+    required = ("host", "username")
     for key in required:
         value = str(values.get(key, ""))
         if not value.strip():
@@ -39,6 +73,12 @@ def validate_connection(values: dict[str, str]) -> dict[str, str]:
         if "\0" in value:
             raise ValueError(f"O campo {key} contém um caractere de controle inválido.")
         normalized[key] = value.strip()
+    if policy == "system-ca" and values.get("trusted-cert", "") != "":
+        raise ValueError("trusted-cert não pode ser usado com a política system-ca.")
+    normalized["trusted-cert"] = normalize_trusted_cert(
+        values.get("trusted-cert"),
+        required=policy != "system-ca",
+    )
     if "password" in values:
         password = str(values["password"])
         if not password.strip() or any(char in password for char in ("\n", "\r", "\0")):
@@ -100,10 +140,19 @@ def parse_connection_text(content: str) -> dict[str, str]:
         if key in values:
             raise ValueError(f"Diretiva duplicada em connection.conf: {key}")
 
-        value = value_text[1:] if key == "password" and value_text.startswith(" ") else value_text.strip()
+        if key == "password" and value_text.startswith(" "):
+            value = value_text[1:]
+        elif key in {"trusted-cert", "certificate-policy"}:
+            value = value_text[1:] if value_text.startswith(" ") else value_text
+        else:
+            value = value_text.strip()
         values[key] = value
 
-    unknown = set(values) - REQUIRED_CONNECTION_KEYS - {"password"}
+    unknown = set(values) - REQUIRED_CONNECTION_KEYS - {
+        "password",
+        "trusted-cert",
+        "certificate-policy",
+    }
     if unknown:
         raise ValueError(
             "Diretivas não permitidas em connection.conf: "
@@ -186,7 +235,12 @@ def _connection_content(values: dict[str, str]) -> str:
         f"username = {values['username']}\n"
         "set-routes = 0\n"
         "set-dns = 0\n"
-        f"trusted-cert = {values['trusted-cert']}\n"
+        f"certificate-policy = {values['certificate-policy']}\n"
+        + (
+            f"trusted-cert = {values['trusted-cert']}\n"
+            if values.get("trusted-cert")
+            else ""
+        )
     )
 
 

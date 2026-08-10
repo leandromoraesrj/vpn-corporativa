@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -12,6 +13,8 @@ CONNECTION_FILE = CONFIG_DIR / "connection.conf"
 ROUTES_FILE = CONFIG_DIR / "routes.conf"
 HOSTS_FILE = CONFIG_DIR / "hosts.conf"
 SECONDARY_FILE = CONFIG_DIR / "secondary.conf"
+PREFERENCES_FILE = CONFIG_DIR / "preferences.conf"
+DEFAULT_SECONDARY_INTERFACE = "tun0"
 
 
 def ensure_config_dir() -> None:
@@ -31,9 +34,36 @@ def read_key_values() -> dict[str, str]:
         key = key_text.strip()
         if key == "password":
             values[key] = value_text[1:] if value_text.startswith(" ") else value_text
+        elif key in {"trusted-cert", "certificate-policy"}:
+            values[key] = value_text[1:] if value_text.startswith(" ") else value_text
         else:
             values[key] = value_text.strip()
     return values
+
+
+def read_auto_reconnect_primary() -> bool:
+    """Return the safe, backward-compatible default when absent or invalid."""
+    if not PREFERENCES_FILE.exists():
+        return True
+    for raw in PREFERENCES_FILE.read_text(encoding="utf-8").splitlines():
+        if "=" not in raw or raw.lstrip().startswith("#"):
+            continue
+        key, value = raw.split("=", 1)
+        if key.strip() == "auto-reconnect-primary":
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+            return True
+    return True
+
+
+def save_auto_reconnect_primary(enabled: bool) -> None:
+    atomic_write(
+        PREFERENCES_FILE,
+        f"auto-reconnect-primary = {'true' if enabled else 'false'}\n",
+    )
 
 
 def atomic_write(path: Path, content: str, mode: int = 0o600) -> None:
@@ -69,6 +99,49 @@ def read_secondary_url() -> str:
         if key.strip() == "portal-url":
             return value.strip()
     return ""
+
+
+def validate_secondary_interface(value: str) -> str:
+    """Validate a Linux interface name without accepting path-like input."""
+    normalized = value.strip()
+    if not normalized:
+        return ""
+    if any(ord(char) < 32 or ord(char) == 127 for char in normalized):
+        raise ValueError("O nome da interface contém um caractere inválido.")
+    if len(normalized) > 15 or not re.fullmatch(r"[A-Za-z0-9_.-]+", normalized):
+        raise ValueError("Informe um nome de interface Linux válido.")
+    return normalized
+
+
+def read_secondary_interface() -> str:
+    """Return the configured interface, preserving an explicit empty value."""
+    for raw in _read_secondary_lines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() == "interface":
+            return validate_secondary_interface(value)
+    return DEFAULT_SECONDARY_INTERFACE
+
+
+def save_secondary_interface(value: str) -> None:
+    normalized = validate_secondary_interface(value)
+    lines = _read_secondary_lines()
+    updated: list[str] = []
+    replaced = False
+    for raw in lines:
+        if "=" in raw and not raw.lstrip().startswith("#"):
+            key, _existing = raw.split("=", 1)
+            if key.strip() == "interface":
+                if not replaced:
+                    updated.append(f"interface = {normalized}")
+                    replaced = True
+                continue
+        updated.append(raw)
+    if not replaced:
+        updated.append(f"interface = {normalized}")
+    atomic_write(SECONDARY_FILE, "\n".join(updated) + "\n")
 
 
 def validate_secondary_url(value: str) -> str:
@@ -115,8 +188,11 @@ def save_connection(values: dict[str, str]) -> None:
         f"username = {normalized['username']}\n"
         "set-routes = 0\n"
         "set-dns = 0\n"
-        f"trusted-cert = {normalized['trusted-cert']}\n"
     )
+    if str(values.get("certificate-policy", "")).strip():
+        content += f"certificate-policy = {normalized['certificate-policy']}\n"
+    if normalized["trusted-cert"]:
+        content += f"trusted-cert = {normalized['trusted-cert']}\n"
     atomic_write(CONNECTION_FILE, content)
 
 
